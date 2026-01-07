@@ -2,3 +2,5 @@
 logs/runs
 logs/*.log
 logs/queries
+*.db
+duckdb.db
