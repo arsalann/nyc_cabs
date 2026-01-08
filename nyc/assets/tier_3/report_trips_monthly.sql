@@ -6,6 +6,14 @@ description: |
   Monthly summary report of NYC taxi trips aggregated by taxi type and month.
   Calculates average and total metrics for trip duration, total amount, and tip amount,
   as well as total trip count.
+  
+  Query Operations:
+  - Step 1: Extracts month from pickup_time using DATE_TRUNC('month', pickup_time) to create grouping key for monthly aggregation (e.g., 2022-03-15 14:30:00 → 2022-03-01 00:00:00). Applies data quality filters to ensure trip_duration_seconds, total_amount, and tip_amount are NOT NULL (filtering out NULLs ensures accurate aggregations as NULL values would skew averages). Filters by date range using month-level truncation to match tier_1/tier_2 logic.
+  - Step 2: Aggregates metrics by taxi_type and month_date using GROUP BY, creating one row per taxi type per month. Calculates both average and total metrics: trip_duration_avg and trip_duration_total (average and total trip duration in seconds), total_amount_avg and total_amount_total (average fare per trip and total revenue for the month), tip_amount_avg and tip_amount_total (average tip per trip and total tips for the month), and total_trips (count of trips in the month). Both averages and totals are calculated because averages are useful for understanding typical trip characteristics while totals are useful for understanding overall business metrics (revenue, volume).
+  - Step 3: Final select with all required columns in proper order (primary keys first, then metrics in logical groups).
+  
+  Aggregation Level: Monthly aggregates by taxi type (one row per taxi_type per month).
+  
   Sample query:
   ```sql
   SELECT *
@@ -67,27 +75,9 @@ columns:
 
 @bruin */
 
-WITH trips_by_month AS (
-  {# 
-    Step 1: Extract month from pickup datetime and prepare data for aggregation
-    
-    Month Extraction:
-    - DATE_TRUNC('month', pickup_time) truncates timestamp to first day of month
-    - Example: 2022-03-15 14:30:00 → 2022-03-01 00:00:00
-    - This creates a grouping key for monthly aggregation
-    - month_date becomes the primary key component (one row per taxi_type per month)
-    
-    Data Quality Filters:
-    - trip_duration_seconds IS NOT NULL: Required for average/total duration calculations
-    - total_amount IS NOT NULL: Required for average/total amount calculations
-    - tip_amount IS NOT NULL: Required for average/total tip calculations
-    - Filtering out NULLs ensures accurate aggregations (NULL values would skew averages)
-    
-    Date Range Filtering:
-    - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
-    - Truncate to month level to match tier_1/tier_2 logic (ingestion loads full months)
-    - The time_interval materialization strategy already handles deleting data in the interval range
-  #}
+WITH
+
+trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data for aggregation
   SELECT
     taxi_type,
     DATE_TRUNC('month', pickup_time) AS month_date,
@@ -96,53 +86,13 @@ WITH trips_by_month AS (
     tip_amount,
   FROM tier_2.trips_summary
   WHERE 1=1
-    {# 
-      Filter by date range using month-level truncation
-      - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
-      - Truncate interval dates to month level to match tier_1/tier_2 logic
-      - Use BETWEEN to include all trips in the month range
-    #}
     AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
-    {# Data quality: ensure all metrics are present for accurate aggregations #}
     AND trip_duration_seconds IS NOT NULL
     AND total_amount IS NOT NULL
     AND tip_amount IS NOT NULL
 )
 
-, monthly_aggregates AS (
-  {# 
-    Step 2: Aggregate metrics by taxi type and month
-    
-    Aggregation Strategy:
-    - GROUP BY taxi_type, month_date creates one row per taxi type per month
-    - This matches the required schema: monthly summary by taxi type
-    
-    Metrics Calculated:
-    1. Trip Duration:
-       - trip_duration_avg: Average trip duration in seconds (for reporting)
-       - trip_duration_total: Total trip duration in seconds (for analysis)
-    
-    2. Total Amount:
-       - total_amount_avg: Average fare per trip (for reporting)
-       - total_amount_total: Total revenue for the month (for analysis)
-    
-    3. Tip Amount:
-       - tip_amount_avg: Average tip per trip (for reporting)
-       - tip_amount_total: Total tips for the month (for analysis)
-    
-    4. Trip Count:
-       - total_trips: Number of trips in the month (for reporting and analysis)
-    
-    Why both average and total:
-    - Averages are useful for understanding typical trip characteristics
-    - Totals are useful for understanding overall business metrics (revenue, volume)
-    - Both metrics are required by the specification
-    
-    Aggregation Functions:
-    - AVG(): Calculates mean value across all trips in the month
-    - SUM(): Calculates total value across all trips in the month
-    - COUNT(*): Counts number of trips (rows) in each group
-  #}
+, monthly_aggregates AS ( -- Step 2: Aggregate metrics by taxi type and month
   SELECT
     taxi_type,
     month_date,
@@ -160,20 +110,7 @@ WITH trips_by_month AS (
     month_date
 )
 
-, final AS (
-  {# 
-    Step 3: Final select with all required columns
-    
-    Purpose:
-    - Simple passthrough to maintain consistent CTE pattern
-    - Ensures all columns are explicitly listed in final SELECT
-    - Matches the schema defined in the @bruin config
-    
-    Column Order:
-    - Matches the order specified in the requirements
-    - Primary keys first (taxi_type, month_date)
-    - Then metrics in logical groups (duration, amount, tip, count)
-  #}
+, final AS ( -- Step 3: Final select with all required columns
   SELECT
     taxi_type,
     month_date,
@@ -197,5 +134,4 @@ SELECT
   tip_amount_avg,
   tip_amount_total,
   total_trips,
-FROM final;
-
+FROM final

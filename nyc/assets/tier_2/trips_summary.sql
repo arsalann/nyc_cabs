@@ -6,6 +6,16 @@ description: |
   Transforms and cleans raw trip data from tier_1.
   Deduplicates trips, selects necessary columns, and joins with the taxi zone lookup table
   to enrich data with borough and zone names.
+  
+  Query Operations:
+  - Step 1: Selects necessary columns from tier_1 and applies data quality filters. Ensures all primary key columns (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type) are NOT NULL, which is required for the merge strategy. Filters by date range using month-level truncation to match tier_1 logic (ingestion loads full months).
+  - Step 2: Deduplicates trips using ROW_NUMBER() window function with composite key (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type). If duplicate trips exist, keeps the most recent record (ordered by pickup_time DESC) to handle data quality issues where trip records may have been updated/corrected.
+  - Step 3: Filters to keep only deduplicated records (rn=1) and calculates trip duration in seconds using EXTRACT(EPOCH FROM (dropoff_time - pickup_time)). Trip duration is a derived metric calculated once here to avoid recalculating in downstream queries.
+  - Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table. LEFT JOIN ensures all trips are preserved even if location ID doesn't exist in lookup table, preserving data integrity.
+  - Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table. Adds Borough and Zone names for both pickup and dropoff locations to make data more accessible for analysis and reporting.
+  
+  Aggregation Level: Individual trip records with location enrichment and deduplication applied.
+  
   Sample query:
   ```sql
   SELECT *
@@ -90,27 +100,9 @@ columns:
 
 @bruin */
 
-WITH raw_trips AS (
-  {# 
-    Step 1: Select necessary columns from tier_1 and apply data quality filters
-    
-    Purpose:
-    - This tier focuses on cleaned, deduplicated, and enriched data
-    - We only select columns needed for downstream processing and reporting
-    - Removes columns like vendorid, ratecodeid that aren't needed for summaries
-    
-    Data Quality Filters:
-    - All primary key columns must be NOT NULL (required for merge strategy)
-    - pickup_time: Required for incremental processing and time-based filtering
-    - dropoff_time: Required for trip duration calculation
-    - pulocationid and dolocationid: Required for location enrichment and deduplication
-    - taxi_type: Required for grouping and filtering by taxi type
-    
-    Why filter by date range:
-    - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
-    - Truncate to month level to match tier_1 logic (ingestion loads full months)
-    - The time_interval materialization strategy already handles deleting data in the interval range
-  #}
+WITH
+
+raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data quality filters
   SELECT
     pickup_time,
     dropoff_time,
@@ -124,14 +116,7 @@ WITH raw_trips AS (
     total_amount,
   FROM tier_1.trips_historic
   WHERE 1=1
-    {# 
-      Filter by date range using month-level truncation
-      - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
-      - Truncate interval dates to month level to match tier_1 logic
-      - Use BETWEEN to include all trips in the month range
-    #}
     AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
-    {# Data quality: ensure all required fields are present #}
     AND pickup_time IS NOT NULL
     AND dropoff_time IS NOT NULL
     AND pulocationid IS NOT NULL
@@ -139,24 +124,7 @@ WITH raw_trips AS (
     AND taxi_type IS NOT NULL
 )
 
-, deduplicated_trips AS (
-  {# 
-    Step 2: Deduplicate trips using window function
-    
-    Deduplication Strategy:
-    - Composite key: (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type)
-    - This combination uniquely identifies a trip
-    - If the same trip appears multiple times (data quality issue), we keep the most recent
-    
-    Why ROW_NUMBER() window function:
-    - PARTITION BY groups records with the same composite key
-    - ORDER BY pickup_time DESC ensures most recent record gets rn=1
-    - This handles edge cases where duplicate records might exist in source data
-    
-    Why keep most recent:
-    - If a trip record was updated/corrected, the most recent version is likely the most accurate
-    - This is a conservative approach to data quality
-  #}
+, deduplicated_trips AS ( -- Step 2: Deduplicate trips using ROW_NUMBER() window function
   SELECT
     *,
     ROW_NUMBER() OVER (
@@ -166,25 +134,7 @@ WITH raw_trips AS (
   FROM raw_trips
 )
 
-, cleaned_trips AS (
-  {# 
-    Step 3: Filter to keep only deduplicated records and calculate trip duration
-    
-    Deduplication Filter:
-    - rn = 1 keeps only the first record (most recent) for each unique trip
-    - This removes duplicates identified in the previous step
-    
-    Trip Duration Calculation:
-    - EXTRACT(EPOCH FROM ...) converts the time difference to seconds
-    - EPOCH extracts Unix timestamp (seconds since 1970-01-01)
-    - Subtracting pickup from dropoff gives duration in seconds
-    - This metric is needed for monthly reports (average trip duration)
-    
-    Why calculate here:
-    - Trip duration is a derived metric, not in source data
-    - Calculating once here avoids recalculating in downstream queries
-    - Stored for use in tier_3 monthly reports
-  #}
+, cleaned_trips AS ( -- Step 3: Filters to keep only deduplicated records (rn=1) and calculates trip duration in seconds
   SELECT
     pickup_time,
     dropoff_time,
@@ -196,32 +146,13 @@ WITH raw_trips AS (
     fare_amount,
     tip_amount,
     total_amount,
-    {# Calculate trip duration: dropoff time - pickup time, converted to seconds #}
     EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) AS trip_duration_seconds,
   FROM deduplicated_trips
   WHERE 1=1
-    {# Keep only the first (most recent) record for each unique trip #}
     AND rn = 1
 )
 
-, trips_with_lookup AS (
-  {# 
-    Step 4: Enrich trips with pickup location information
-    
-    Lookup Join Strategy:
-    - LEFT JOIN ensures we keep all trips even if location ID doesn't exist in lookup table
-    - Some location IDs might be invalid or missing from the lookup table
-    - LEFT JOIN preserves data integrity - we don't lose trips due to missing lookup data
-    
-    Why separate pickup and dropoff joins:
-    - We need to join the lookup table twice (once for pickup, once for dropoff)
-    - Doing them separately makes the query clearer and easier to maintain
-    - Allows us to alias the lookup table differently for each join
-    
-    Enrichment:
-    - Adds human-readable Borough and Zone names for pickup location
-    - Makes data more accessible for analysis and reporting
-  #}
+, trips_with_lookup AS ( -- Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table
   SELECT
     ct.*,
     pickup_lookup.Borough AS pickup_borough,
@@ -231,20 +162,7 @@ WITH raw_trips AS (
     ON ct.pulocationid = pickup_lookup.LocationID
 )
 
-, final AS (
-  {# 
-    Step 5: Enrich trips with dropoff location information
-    
-    Second Lookup Join:
-    - Similar to pickup join, but for dropoff location
-    - Uses the same lookup table but with different alias (dropoff_lookup)
-    - Adds Borough and Zone names for dropoff location
-    
-    Final Result:
-    - Contains all trip data with both pickup and dropoff location enrichment
-    - Ready for use in tier_3 monthly reports
-    - All primary key columns are present and non-null (required for merge strategy)
-  #}
+, final AS ( -- Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table
   SELECT
     twl.pickup_time,
     twl.dropoff_time,
@@ -282,5 +200,4 @@ SELECT
   dropoff_borough,
   dropoff_zone,
   trip_duration_seconds,
-FROM final;
-
+FROM final
