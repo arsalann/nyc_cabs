@@ -72,7 +72,7 @@ WITH trips_by_month AS (
     Step 1: Extract month from pickup datetime and prepare data for aggregation
     
     Month Extraction:
-    - DATE_TRUNC('month', tpep_pickup_datetime) truncates timestamp to first day of month
+    - DATE_TRUNC('month', pickup_time) truncates timestamp to first day of month
     - Example: 2022-03-15 14:30:00 → 2022-03-01 00:00:00
     - This creates a grouping key for monthly aggregation
     - month_date becomes the primary key component (one row per taxi_type per month)
@@ -90,7 +90,7 @@ WITH trips_by_month AS (
   #}
   SELECT
     taxi_type,
-    DATE_TRUNC('month', tpep_pickup_datetime) AS month_date,
+    DATE_TRUNC('month', pickup_time) AS month_date,
     trip_duration_seconds,
     total_amount,
     tip_amount,
@@ -102,7 +102,7 @@ WITH trips_by_month AS (
       - Truncate interval dates to month level to match tier_1/tier_2 logic
       - Use BETWEEN to include all trips in the month range
     #}
-    AND DATE_TRUNC('month', tpep_pickup_datetime) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
     {# Data quality: ensure all metrics are present for accurate aggregations #}
     AND trip_duration_seconds IS NOT NULL
     AND total_amount IS NOT NULL

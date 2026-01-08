@@ -121,10 +121,10 @@ default:
 
 ### 2. Tier 1: Raw Data Storage
 
-#### `tier_1.trips`
+#### `tier_1.trips_historic`
 - **Type**: `duckdb.sql`
 - **Strategy**: `time_interval`
-- **Incremental Key**: `tpep_pickup_datetime`
+- **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
 - **Interval Modifiers**: `start: -3d, end: 1d`
 - **Purpose**: Store raw ingested data from Python ingestion table to persistent storage
@@ -133,20 +133,20 @@ default:
   - Filter by `start_datetime` and `end_datetime` (from interval modifiers)
   - Preserve all original columns from source (columns already normalized by Python asset)
   - Handle schema evolution (e.g., `cbd_congestion_fee` column in newer data)
-  - Filter out NULL `tpep_pickup_datetime` values
+  - Filter out NULL `pickup_time` values
 
 ### 3. Tier 2: Cleaned & Enriched Data
 
 #### `tier_2.trips_summary`
 - **Type**: `duckdb.sql`
 - **Strategy**: `time_interval`
-- **Incremental Key**: `tpep_pickup_datetime`
+- **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
 - **Interval Modifiers**: `start: -3d, end: 1d`
-- **Primary Key**: Composite (`tpep_pickup_datetime`, `tpep_dropoff_datetime`, `pulocationid`, `dolocationid`, `taxi_type`)
+- **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pulocationid`, `dolocationid`, `taxi_type`)
 - **Purpose**: Clean, deduplicate, and enrich trip data
 - **Key Requirements**:
-  - Read from `tier_1.trips`
+  - Read from `tier_1.trips_historic`
   - Deduplicate using `ROW_NUMBER()` window function
   - Calculate `trip_duration_seconds` (dropoff - pickup)
   - Join with `ingestion.taxi_zone_lookup` for pickup and dropoff locations
@@ -165,7 +165,7 @@ default:
 - **Purpose**: Generate monthly summary reports
 - **Key Requirements**:
   - Read from `tier_2.trips_summary`
-  - Group by `taxi_type` and `DATE_TRUNC('month', tpep_pickup_datetime)`
+  - Group by `taxi_type` and `DATE_TRUNC('month', pickup_time)`
   - Calculate metrics:
     - `trip_duration_avg`, `trip_duration_total`
     - `total_amount_avg`, `total_amount_total`
@@ -290,7 +290,7 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
 - [ ] Create `nyc/macros/ingestion.sql` (optional - can inline Jinja in asset)
 - [ ] Create `ingestion.ingest_trips_python.py` with date-to-month conversion logic and column normalization
 - [ ] Create `ingestion.taxi_zone_lookup.sql` with CSV ingestion
-- [ ] Create `tier_1.trips.sql` with time_interval strategy
+- [ ] Create `tier_1.trips_historic.sql` with time_interval strategy
 - [ ] Create `tier_2.trips_summary.sql` with deduplication and enrichment
 - [ ] Create `tier_3.report_trips_monthly.sql` with monthly aggregations
 - [ ] Add all required Bruin metadata (name, uri, description, owner, tags, columns)

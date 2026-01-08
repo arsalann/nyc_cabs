@@ -102,9 +102,9 @@ def materialize():
               continue
 
     if not all_dataframes:
-        combined_df = pd.concat(all_dataframes, ignore_index=True)
-        print(f"Total rows combined: {len(combined_df)}")
-        return combined_df
-    else:
         print("No dataframes to combine")
         raise ValueError("No dataframes to combine")
+
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    print(f"Total rows combined: {len(combined_df)}")
+    return combined_df

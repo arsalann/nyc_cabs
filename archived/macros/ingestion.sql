@@ -64,8 +64,8 @@
     #}
     SELECT
       NULL AS vendorid,
-      NULL AS tpep_pickup_datetime,
-      NULL AS tpep_dropoff_datetime,
+      NULL AS pickup_time,
+      NULL AS dropoff_time,
       NULL AS passenger_count,
       NULL AS trip_distance,
       NULL AS ratecodeid,

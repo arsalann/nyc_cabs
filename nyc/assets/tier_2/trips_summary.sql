@@ -22,22 +22,22 @@ tags:
   - cleaned-data
 
 depends:
-  - tier_1.trips
+  - tier_1.trips_historic
   - ingestion.taxi_zone_lookup
 
 materialization:
   type: table
   strategy: time_interval
-  incremental_key: tpep_pickup_datetime
+  incremental_key: pickup_time
   time_granularity: timestamp
 
 columns:
-  - name: tpep_pickup_datetime
+  - name: pickup_time
     type: TIMESTAMP
     description: The date and time when the meter was engaged
     primary_key: true
     nullable: false
-  - name: tpep_dropoff_datetime
+  - name: dropoff_time
     type: TIMESTAMP
     description: The date and time when the meter was disengaged
     primary_key: true
@@ -101,8 +101,8 @@ WITH raw_trips AS (
     
     Data Quality Filters:
     - All primary key columns must be NOT NULL (required for merge strategy)
-    - tpep_pickup_datetime: Required for incremental processing and time-based filtering
-    - tpep_dropoff_datetime: Required for trip duration calculation
+    - pickup_time: Required for incremental processing and time-based filtering
+    - dropoff_time: Required for trip duration calculation
     - pulocationid and dolocationid: Required for location enrichment and deduplication
     - taxi_type: Required for grouping and filtering by taxi type
     
@@ -112,8 +112,8 @@ WITH raw_trips AS (
     - The time_interval materialization strategy already handles deleting data in the interval range
   #}
   SELECT
-    tpep_pickup_datetime,
-    tpep_dropoff_datetime,
+    pickup_time,
+    dropoff_time,
     pulocationid,
     dolocationid,
     taxi_type,
@@ -122,7 +122,7 @@ WITH raw_trips AS (
     fare_amount,
     tip_amount,
     total_amount,
-  FROM tier_1.trips
+  FROM tier_1.trips_historic
   WHERE 1=1
     {# 
       Filter by date range using month-level truncation
@@ -130,10 +130,10 @@ WITH raw_trips AS (
       - Truncate interval dates to month level to match tier_1 logic
       - Use BETWEEN to include all trips in the month range
     #}
-    AND DATE_TRUNC('month', tpep_pickup_datetime) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
     {# Data quality: ensure all required fields are present #}
-    AND tpep_pickup_datetime IS NOT NULL
-    AND tpep_dropoff_datetime IS NOT NULL
+    AND pickup_time IS NOT NULL
+    AND dropoff_time IS NOT NULL
     AND pulocationid IS NOT NULL
     AND dolocationid IS NOT NULL
     AND taxi_type IS NOT NULL
@@ -144,13 +144,13 @@ WITH raw_trips AS (
     Step 2: Deduplicate trips using window function
     
     Deduplication Strategy:
-    - Composite key: (tpep_pickup_datetime, tpep_dropoff_datetime, pulocationid, dolocationid, taxi_type)
+    - Composite key: (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type)
     - This combination uniquely identifies a trip
     - If the same trip appears multiple times (data quality issue), we keep the most recent
     
     Why ROW_NUMBER() window function:
     - PARTITION BY groups records with the same composite key
-    - ORDER BY tpep_pickup_datetime DESC ensures most recent record gets rn=1
+    - ORDER BY pickup_time DESC ensures most recent record gets rn=1
     - This handles edge cases where duplicate records might exist in source data
     
     Why keep most recent:
@@ -160,8 +160,8 @@ WITH raw_trips AS (
   SELECT
     *,
     ROW_NUMBER() OVER (
-      PARTITION BY tpep_pickup_datetime, tpep_dropoff_datetime, pulocationid, dolocationid, taxi_type
-      ORDER BY tpep_pickup_datetime DESC
+      PARTITION BY pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type
+      ORDER BY pickup_time DESC
     ) AS rn,
   FROM raw_trips
 )
@@ -186,8 +186,8 @@ WITH raw_trips AS (
     - Stored for use in tier_3 monthly reports
   #}
   SELECT
-    tpep_pickup_datetime,
-    tpep_dropoff_datetime,
+    pickup_time,
+    dropoff_time,
     pulocationid,
     dolocationid,
     taxi_type,
@@ -197,7 +197,7 @@ WITH raw_trips AS (
     tip_amount,
     total_amount,
     {# Calculate trip duration: dropoff time - pickup time, converted to seconds #}
-    EXTRACT(EPOCH FROM (tpep_dropoff_datetime - tpep_pickup_datetime)) AS trip_duration_seconds,
+    EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) AS trip_duration_seconds,
   FROM deduplicated_trips
   WHERE 1=1
     {# Keep only the first (most recent) record for each unique trip #}
@@ -246,8 +246,8 @@ WITH raw_trips AS (
     - All primary key columns are present and non-null (required for merge strategy)
   #}
   SELECT
-    twl.tpep_pickup_datetime,
-    twl.tpep_dropoff_datetime,
+    twl.pickup_time,
+    twl.dropoff_time,
     twl.pulocationid,
     twl.dolocationid,
     twl.taxi_type,
@@ -267,8 +267,8 @@ WITH raw_trips AS (
 )
 
 SELECT
-  tpep_pickup_datetime,
-  tpep_dropoff_datetime,
+  pickup_time,
+  dropoff_time,
   pulocationid,
   dolocationid,
   taxi_type,

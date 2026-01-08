@@ -116,7 +116,7 @@ variables:
 **Action**: Created `assets/tier_2/trips_summary.sql` to clean and enrich trip data.
 
 **Design Choices**:
-- Used composite primary key: `(tpep_pickup_datetime, tpep_dropoff_datetime, pulocationid, dolocationid, taxi_type)`
+- Used composite primary key: `(tpep_pickup_datetime, dropoff_time, pulocationid, dolocationid, taxi_type)`
 - This composite key uniquely identifies a trip and prevents duplicates
 - Deduplication logic uses `ROW_NUMBER()` window function partitioned by the primary key columns
 - Keeps the most recent record (ORDER BY tpep_pickup_datetime DESC) if duplicates exist

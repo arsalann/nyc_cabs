@@ -1,31 +1,18 @@
 /* @bruin
-name: tier_1.trips
-uri: neptune.tier_1.trips
+name: tier_1.trips_historic
+uri: neptune.tier_1.trips_historic
 type: duckdb.sql
 description: |
   Stores raw ingested taxi trip data from the Python ingestion table.
   Reads all columns from ingestion.ingest_trips_python and normalizes column names to match tier_1 schema.
   This is the first persistent storage layer for raw trip data.
-  
-  Column normalization:
-  - vendor_id -> vendorid
-  - ratecode_id -> ratecodeid
-  - pu_location_id -> pulocationid
-  - do_location_id -> dolocationid
-  Sample query:
-  ```sql
-  SELECT *
-  FROM tier_1.trips
-  WHERE 1=1
-    AND tpep_pickup_datetime >= '2022-01-01'
-  LIMIT 10
-  ```
+  Standardizes columns names.
+  Filter by date range using month-level truncation
+  - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
+  - Truncate interval dates to month level to match ingestion logic (ingestion loads full months)
+  - The time_interval materialization strategy already handles deleting data in the interval range
 
 owner: data-engineering
-tags:
-  - tier-1
-  - nyc-taxi
-  - raw-data
 
 depends:
   - ingestion.ingest_trips_python
@@ -33,17 +20,17 @@ depends:
 materialization:
   type: table
   strategy: time_interval
-  incremental_key: tpep_pickup_datetime
+  incremental_key: pickup_time
   time_granularity: timestamp
 
 columns:
   - name: vendorid
     type: INTEGER
     description: A code indicating the TPEP provider that provided the record (1=Creative Mobile Technologies, LLC; 2=VeriFone Inc.)
-  - name: tpep_pickup_datetime
+  - name: pickup_time
     type: TIMESTAMP
     description: The date and time when the meter was engaged
-  - name: tpep_dropoff_datetime
+  - name: dropoff_time
     type: TIMESTAMP
     description: The date and time when the meter was disengaged
   - name: passenger_count
@@ -102,8 +89,8 @@ columns:
 
 SELECT
   vendor_id AS vendorid,
-  tpep_pickup_datetime,
-  tpep_dropoff_datetime,
+  tpep_pickup_datetime AS pickup_time,
+  tpep_dropoff_datetime AS dropoff_time,
   passenger_count,
   trip_distance,
   ratecode_id AS ratecodeid,
@@ -123,14 +110,5 @@ SELECT
   taxi_type,
 FROM ingestion.ingest_trips_python
 WHERE 1=1
-  {# 
-    Filter by date range using month-level truncation
-    - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
-    - Truncate interval dates to month level to match ingestion logic (ingestion loads full months)
-    - Use BETWEEN to include all trips in the month range
-    - The time_interval materialization strategy already handles deleting data in the interval range
-  #}
-  AND DATE_TRUNC('month', tpep_pickup_datetime) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
-  {# Data quality: ensure pickup datetime exists (required for incremental processing) #}
-  AND tpep_pickup_datetime IS NOT NULL;
-
+  AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+  AND pickup_time IS NOT NULL
