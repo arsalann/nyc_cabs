@@ -90,6 +90,11 @@ def materialize():
               response.raise_for_status()
 
               df = pd.read_parquet(io.BytesIO(response.content))
+              
+              # Normalize column names to lowercase with underscores to avoid collisions
+              # e.g., 'Airport_fee' and 'airport_fee' both become 'airport_fee'
+              df.columns = df.columns.str.lower().str.replace(' ', '_')
+              
               df['taxi_type'] = taxi_type
               df['extracted_at'] = extracted_at
 
