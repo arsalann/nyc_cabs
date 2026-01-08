@@ -47,24 +47,21 @@ This project serves as a **template and learning resource** for developers who w
    - Asset-level tags and ownership
 
 6. **Data Quality Checks**
-   - Custom quality checks to validate business rules and data integrity at the asset level
-   - Column-level checks to ensure individual columns meet expected constraints
+   - Custom quality checks using SQL queries to validate business rules and data integrity
+   - Column-level checks using built-in check types (non_negative, positive, min, max)
    - Examples in this pipeline:
      - **tier_1.trips_historic**: 
        - Custom check: Validates that dropoff_time is after pickup_time (trip cannot end before it starts)
        - Custom check: Ensures trip_distance is non-negative
-       - Column check: `trip_distance >= 0` (business rule validation)
-       - Column check: `dropoff_time > pickup_time` (temporal consistency)
+       - Column check: `trip_distance` uses `non_negative` check
      - **tier_2.trips_summary**: 
        - Custom check: Validates trip_duration_seconds is positive and reasonable (less than 24 hours)
        - Custom check: Ensures total_amount is non-negative
-       - Column check: `trip_duration_seconds > 0 AND trip_duration_seconds < 86400` (reasonable trip duration)
-       - Column check: `total_amount >= 0` (non-negative fare)
+       - Column checks: `trip_duration_seconds` uses `positive` and `max: 86400`, `total_amount` uses `non_negative`
      - **tier_3.report_trips_monthly**: 
        - Custom check: Validates total_trips count is positive for each month
        - Custom check: Ensures aggregated amounts are non-negative
-       - Column check: `total_trips > 0` (at least one trip per month)
-       - Column check: `total_amount_total >= 0` (non-negative revenue)
+       - Column checks: `total_trips` uses `positive`, `total_amount_total` uses `non_negative`
 
 ### Data Processing Patterns
 

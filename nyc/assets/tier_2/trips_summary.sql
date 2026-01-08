@@ -83,8 +83,7 @@ columns:
     type: DOUBLE
     description: The total amount charged to passengers (does not include cash tips)
     checks:
-      - expression: total_amount >= 0
-        description: Total amount must be non-negative
+      - name: non_negative
   - name: pickup_borough
     type: VARCHAR
     description: Borough name where the pickup occurred
@@ -101,8 +100,9 @@ columns:
     type: DOUBLE
     description: Calculated trip duration in seconds (dropoff time - pickup time)
     checks:
-      - expression: trip_duration_seconds > 0 AND trip_duration_seconds < 86400
-        description: Trip duration must be positive and less than 24 hours
+      - name: positive
+      - name: max
+        value: 86400
   - name: extracted_at
     type: TIMESTAMP
     description: Timestamp when the data was extracted from the source
@@ -110,15 +110,15 @@ columns:
     type: TIMESTAMP
     description: Timestamp when the data was last updated in tier_2
 
-quality_checks:
+custom_checks:
   - name: reasonable_trip_duration
-    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE trip_duration_seconds <= 0 OR trip_duration_seconds >= 86400
-    expectation: 0
     description: Validates trip_duration_seconds is positive and reasonable (less than 24 hours)
+    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE trip_duration_seconds <= 0 OR trip_duration_seconds >= 86400
+    value: 0
   - name: non_negative_total_amount
-    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE total_amount < 0
-    expectation: 0
     description: Ensures total_amount is non-negative
+    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE total_amount < 0
+    value: 0
 
 @bruin */
 

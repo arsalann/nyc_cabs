@@ -64,8 +64,7 @@ columns:
     type: DOUBLE
     description: Total amount charged to passengers for the month
     checks:
-      - expression: total_amount_total >= 0
-        description: Total revenue must be non-negative
+      - name: non_negative
   - name: tip_amount_avg
     type: DOUBLE
     description: Average tip amount for the month
@@ -76,8 +75,7 @@ columns:
     type: BIGINT
     description: Total number of trips for the month
     checks:
-      - expression: total_trips > 0
-        description: Must have at least one trip per month
+      - name: positive
   - name: extracted_at
     type: TIMESTAMP
     description: Maximum timestamp when the source data was extracted (latest extraction time for the month)
@@ -85,15 +83,15 @@ columns:
     type: TIMESTAMP
     description: Timestamp when the data was last updated in tier_3
 
-quality_checks:
+custom_checks:
   - name: positive_trip_count
-    query: SELECT COUNT(*) FROM tier_3.report_trips_monthly WHERE total_trips <= 0
-    expectation: 0
     description: Validates total_trips count is positive for each month
+    query: SELECT COUNT(*) FROM tier_3.report_trips_monthly WHERE total_trips <= 0
+    value: 0
   - name: non_negative_revenue
-    query: SELECT COUNT(*) FROM tier_3.report_trips_monthly WHERE total_amount_total < 0
-    expectation: 0
     description: Ensures aggregated total_amount_total is non-negative
+    query: SELECT COUNT(*) FROM tier_3.report_trips_monthly WHERE total_amount_total < 0
+    value: 0
 
 @bruin */
 
