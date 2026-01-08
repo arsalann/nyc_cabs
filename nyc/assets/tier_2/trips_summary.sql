@@ -123,10 +123,6 @@ custom_checks:
     description: Validates trip_duration_seconds is positive and reasonable (less than 24 hours)
     query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE trip_duration_seconds <= 0 OR trip_duration_seconds >= 86400
     value: 0
-  - name: non_negative_total_amount
-    description: Ensures total_amount is non-negative
-    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE total_amount < 0
-    value: 0
 
 @bruin */
 
@@ -184,10 +180,6 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
   FROM deduplicated_trips
   WHERE 1=1
     AND rn = 1
-    -- filter out zero durations (trip cannot end at the same time it starts)
-    AND EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) > 0
-    -- filter out outlier durations that are too long - 8 hours (28800 seconds)
-    AND EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) < 28800
 )
 
 , trips_with_lookup AS ( -- Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table
@@ -225,6 +217,13 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     ON twl.dropoff_location_id = dropoff_lookup.location_id
   LEFT JOIN tier_1.payment_type_lookup AS payment_lookup
     ON CAST(twl.payment_type AS INTEGER) = payment_lookup.payment_type_id
+  WHERE 1=1
+    -- filter out zero durations (trip cannot end at the same time it starts or before it starts)
+    AND trip_duration_seconds > 0
+    -- filter out outlier durations that are too long, 8 hours (28800 seconds)
+    AND trip_duration_seconds < 28800
+    -- filter out negative total amounts
+    AND total_amount >= 0
 )
 
 , final AS ( -- Step 7: Final select with all required columns

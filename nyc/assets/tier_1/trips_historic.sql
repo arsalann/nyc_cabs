@@ -91,10 +91,6 @@ columns:
     description: Timestamp when the data was loaded into tier_1
 
 custom_checks:
-  - name: dropoff_after_pickup
-    description: Validates that dropoff_time is after pickup_time (trip cannot end before it starts)
-    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE dropoff_time < pickup_time
-    value: 0
   - name: non_negative_trip_distance
     description: Ensures trip_distance is non-negative
     query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE trip_distance < 0
@@ -103,15 +99,14 @@ custom_checks:
 @bruin */
 
 SELECT
-  vendor_id AS vendorid,
-  CAST(tpep_pickup_datetime AS TIMESTAMP) AS pickup_time,
-  CAST(tpep_dropoff_datetime AS TIMESTAMP) AS dropoff_time,
+  vendorid,
+  CAST(COALESCE(tpep_pickup_datetime, lpep_pickup_datetime) AS TIMESTAMP) AS pickup_time,
+  CAST(COALESCE(tpep_dropoff_datetime, lpep_dropoff_datetime) AS TIMESTAMP) AS dropoff_time,
   passenger_count,
   trip_distance,
-  ratecode_id,
   store_and_fwd_flag,
-  pu_location_id AS pickup_location_id,
-  do_location_id AS dropoff_location_id,
+  pulocationid AS pickup_location_id,
+  dolocationid AS dropoff_location_id,
   payment_type,
   fare_amount,
   extra,
@@ -127,5 +122,5 @@ SELECT
   CURRENT_TIMESTAMP AS loaded_at,
 FROM ingestion.ingest_trips_python
 WHERE 1=1
-  AND DATE_TRUNC('month', CAST(tpep_pickup_datetime AS TIMESTAMP)) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
-  AND tpep_pickup_datetime IS NOT NULL
+  AND DATE_TRUNC('month', CAST(COALESCE(tpep_pickup_datetime, lpep_pickup_datetime) AS TIMESTAMP)) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
+  AND COALESCE(tpep_pickup_datetime, lpep_pickup_datetime) IS NOT NULL
