@@ -22,7 +22,7 @@ tags:
   - raw-data
 
 depends:
-  - ingestion.trips_raw_in_memory
+  - ingestion.ingest_trips_python
 
 materialization:
   type: table
@@ -99,27 +99,27 @@ columns:
 @bruin */
 
 WITH raw_trips AS (
-  {# 
-    Read raw trip data from the in-memory ingestion table
-    
-    Purpose:
-    - This is the first persistent storage layer for raw trip data
-    - Moves data from temporary in-memory table to permanent tier_1 table
-    - Preserves all original columns from source parquet files
-    
-    Interval Modifiers:
-    - start_datetime and end_datetime are provided by Bruin based on interval_modifiers config
-    - interval_modifiers: start: -3d, end: 1d means process last 3 days (allows for late-arriving data)
-    - Filtering by tpep_pickup_datetime ensures we only process trips in the specified time window
-    
-    Data Quality:
-    - tpep_pickup_datetime IS NOT NULL: Ensures we only store trips with valid pickup times
-    - This is critical because tpep_pickup_datetime is used as the incremental_key
-    
-    Why read from ingestion.trips_raw_in_memory:
-    - The ingestion asset materializes the HTTP parquet data into this table
-    - This tier_1 asset then persists it with incremental strategy for efficient updates
-  #}
+      {# 
+        Read raw trip data from the Python ingestion table
+        
+        Purpose:
+        - This is the first persistent storage layer for raw trip data
+        - Moves data from Python ingestion table to permanent tier_1 table
+        - Preserves all original columns from source parquet files
+        
+        Interval Modifiers:
+        - start_datetime and end_datetime are provided by Bruin based on interval_modifiers config
+        - interval_modifiers: start: -3d, end: 1d means process last 3 days (allows for late-arriving data)
+        - Filtering by tpep_pickup_datetime ensures we only process trips in the specified time window
+        
+        Data Quality:
+        - tpep_pickup_datetime IS NOT NULL: Ensures we only store trips with valid pickup times
+        - This is critical because tpep_pickup_datetime is used as the incremental_key
+        
+        Why read from ingestion.ingest_trips_python:
+        - The Python ingestion asset downloads parquet files and materializes them into this table
+        - This tier_1 asset then persists it with incremental strategy for efficient updates
+      #}
   SELECT
     vendorid,
     tpep_pickup_datetime,
@@ -141,7 +141,7 @@ WITH raw_trips AS (
     congestion_surcharge,
     airport_fee,
     taxi_type,
-  FROM ingestion.trips_raw_in_memory
+      FROM ingestion.ingest_trips_python
   WHERE 1=1
     {# 
       Filter by date range

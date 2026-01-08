@@ -32,7 +32,9 @@ nyc/
 │   └── ingestion.sql
 └── assets/
     ├── ingestion/
-    │   ├── trips_raw_in_memory.sql
+    │   ├── ingest_trips_python.py (recommended)
+    │   ├── ingest_trips_bulk.sql (alternative)
+    │   ├── ingest_trips_single.sql (single month)
     │   └── taxi_zone_lookup.sql
     ├── tier_1/
     │   └── trips.sql
@@ -61,22 +63,47 @@ default:
 
 ### 1. Ingestion Layer
 
-#### `ingestion.trips_raw_in_memory`
+#### `ingestion.ingest_trips_python` (Recommended) ⭐
+- **Type**: `python`
+- **Strategy**: `create+replace` (Python assets use `create+replace`, not `truncate+insert`)
+- **Connection**: `duckdb-default`
+- **Purpose**: Ingest raw trip data from HTTP parquet files using Python
+- **Key Requirements**:
+  - Use `requests` library to download parquet files from HTTP URLs
+  - Loop through all months between `start_date` and `end_date`
+  - Read parquet files into Pandas DataFrames using `pd.read_parquet()`
+  - Rename columns to match expected schema (parquet uses snake_case, need lowercase)
+  - Add `taxi_type` column (default: `'yellow'`)
+  - Combine all DataFrames using `pd.concat()` and return for Bruin materialization
+  - Handle date range to month conversion:
+    - Extract year/month from `start_date` and `end_date`
+    - Generate list of months between start and end (inclusive)
+    - Example: 2021-01-01 to 2022-02-28 → ingest 14 months (Jan 2021 to Feb 2022)
+- **Dependencies**: `pandas`, `requests`, `python-dateutil`, `pyarrow`
+- **Function**: `materialize(start_date=None, end_date=None, **kwargs)` - returns Pandas DataFrame
+- **Note**: Currently, dates must be provided via `--start-date` and `--end-date` flags. Bruin may not automatically pass interval dates to Python assets.
+
+#### `ingestion.ingest_trips_bulk` (Alternative SQL approach)
 - **Type**: `duckdb.sql`
 - **Strategy**: `truncate+insert`
-- **Purpose**: Ingest raw trip data from HTTP parquet files into in-memory table
+- **Purpose**: Ingest raw trip data from HTTP parquet files using SQL UNION ALL
 - **Key Requirements**:
   - Use `read_parquet()` to fetch files from HTTP URLs
   - Generate UNION ALL statements for all months in the date range
   - Add `taxi_type` column (hardcoded to `'yellow'` for now)
-  - Handle date range to month conversion:
-    - Extract year/month from `start_date` and `end_date` (provided by Bruin)
-    - Generate list of months between start and end (inclusive)
-    - Example: 2025-01-01 to 2025-02-15 → ingest months 01 and 02
-  - Use Jinja to loop through months and generate UNION ALL statements
+  - Handle date range to month conversion using Jinja
   - Wrap in CTE structure: `WITH parquet_union AS (...) SELECT * FROM parquet_union`
-- **Date Parsing**: Handle both YYYY-MM-DD and ISO timestamp formats
-- **Jinja Variables**: `start_date`, `end_date` (provided by Bruin)
+- **Note**: May have parser issues with very large date ranges during full-refresh
+
+#### `ingestion.ingest_trips_single` (Single month only)
+- **Type**: `duckdb.sql`
+- **Strategy**: `truncate+insert`
+- **Purpose**: Ingest raw trip data for a single month (uses interval start date's month)
+- **Key Requirements**:
+  - Use `read_parquet()` to fetch single month file
+  - Extract month from `start_date` only
+  - Add `taxi_type` column
+- **Use Case**: Incremental processing of one month at a time
 
 #### `ingestion.taxi_zone_lookup`
 - **Type**: `duckdb.sql`
@@ -163,36 +190,40 @@ bruin validate ./nyc/pipeline.yml --environment default
 
 ### 2. Test Individual Assets (Recommended)
 ```bash
-# Test ingestion
-bruin run ./nyc/assets/ingestion/trips_raw_in_memory.sql \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31
+# Test Python ingestion (recommended)
+bruin run ./nyc/assets/ingestion/ingest_trips_python.py \
+  --start-date 2021-01-01 \
+  --end-date 2022-02-28
 
 # Test lookup table
 bruin run ./nyc/assets/ingestion/taxi_zone_lookup.sql
 
 # Test tier_1
 bruin run ./nyc/assets/tier_1/trips.sql \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31
+  --start-date 2021-01-01 \
+  --end-date 2022-02-28
 
 # Test tier_2
 bruin run ./nyc/assets/tier_2/trips_summary.sql \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31
+  --start-date 2021-01-01 \
+  --end-date 2022-02-28
 
 # Test tier_3
 bruin run ./nyc/assets/tier_3/report_trips_monthly.sql \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31
+  --start-date 2021-01-01 \
+  --end-date 2022-02-28
 ```
 
 ### 3. Run Full Pipeline (Incremental)
 ```bash
+# Run with Python ingestion (recommended)
 bruin run ./nyc/pipeline.yml \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31 \
+  --start-date 2021-01-01 \
+  --end-date 2022-02-28 \
   --environment default
+
+# Verify 14 months of data in final report
+bruin query --connection duckdb-default --query "SELECT COUNT(*) as month_count FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28'"
 ```
 
 ### 4. Test Different Date Ranges
@@ -210,25 +241,38 @@ bruin run ./nyc/pipeline.yml --start-date 2024-12-01 --end-date 2025-01-31
 ### 5. Verify Data
 ```bash
 # Check row counts
-bruin query --asset ingestion.trips_raw_in_memory --query "SELECT COUNT(*) FROM ingestion.trips_raw_in_memory"
+bruin query --asset ingestion.ingest_trips_python --query "SELECT COUNT(*) FROM ingestion.ingest_trips_python"
 
-# Check monthly report
-bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.report_trips_monthly ORDER BY month_date DESC LIMIT 10"
+# Check monthly report (should show 14 months for 2021-01 to 2022-02)
+bruin query --asset tier_3.report_trips_monthly --query "SELECT COUNT(*) as month_count FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28'"
+
+# Check monthly report details
+bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28' ORDER BY month_date"
 ```
 
 ## Known Issues & Workarounds
 
-### Full-Refresh Parser Error
-- **Issue**: Using `--full-refresh` flag causes "Parser Error: syntax error at or near SELECT" in `ingestion.trips_raw_in_memory`
-- **Status**: Under investigation - appears to be a Bruin/Jinja rendering issue with `truncate+insert` strategy
+### Python Asset Date Handling
+- **Issue**: Bruin may not automatically pass `start_date` and `end_date` to Python assets' `materialize()` function
+- **Status**: Under investigation
 - **Workaround**: 
-  - Run without `--full-refresh` for normal operations (incremental updates work fine)
-  - If full refresh is needed, run individual assets without the flag after initial table creation
-  - Use a recent `start_date` in `pipeline.yml` (e.g., 2024-01-01) to minimize date range during full-refresh
+  - Always use `--start-date` and `--end-date` flags when running the pipeline
+  - The Python asset will attempt to read dates from multiple sources (function params, kwargs, environment variables)
+  - If dates are not found, the asset will raise an error (better than silently using wrong dates)
+
+### SQL Bulk Ingestion Parser Error
+- **Issue**: Using `--full-refresh` flag causes "Parser Error: syntax error at or near SELECT" in SQL bulk ingestion assets
+- **Status**: Known issue with large UNION ALL queries
+- **Workaround**: 
+  - Use Python ingestion (`ingest_trips_python`) instead (recommended)
+  - Or use single-month ingestion (`ingest_trips_single`) for incremental processing
+  - Run without `--full-refresh` for normal operations
 
 ### Schema Evolution
-- **Issue**: Parquet file schemas change over time (e.g., `cbd_congestion_fee` added in 2025 data)
-- **Solution**: Use conditional Jinja to check for column existence: `{% if 'cbd_congestion_fee' in get_columns_in_relation('table_name') %}`
+- **Issue**: Parquet file schemas change over time (e.g., column name variations, new columns added)
+- **Solution**: 
+  - Python asset handles column renaming automatically
+  - SQL assets use conditional Jinja: `{% if 'cbd_congestion_fee' in get_columns_in_relation('table_name') %}`
 
 ## Implementation Checklist
 
