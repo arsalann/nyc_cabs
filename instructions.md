@@ -41,6 +41,35 @@ nyc/
         └── report_trips_monthly.sql
 ```
 
+## Local Configuration (`.bruin.yml`)
+
+Before running the pipeline, you need to create a `.bruin.yml` file in the project root directory to configure your local DuckDB connection.
+
+### Setup Instructions
+
+1. **Create `.bruin.yml` file** in the project root:
+   ```yaml
+   default_environment: default
+   environments:
+       default:
+           connections:
+               duckdb:
+                   - name: duckdb-default
+                     path: duckdb.db
+   ```
+
+2. **Add to `.gitignore`**: It's best practice to add `.bruin.yml` to your `.gitignore` file because:
+   - It may contain sensitive connection information and authentication credentials
+   - Different developers may have different local database paths
+   - Environment-specific configurations should not be committed to version control
+
+   Add this line to your `.gitignore`:
+   ```
+   .bruin.yml
+   ```
+
+The `.bruin.yml` file configures your local development environment and tells Bruin where to create and store the DuckDB database file.
+
 ## Pipeline Configuration (`pipeline.yml`)
 
 ```yaml
@@ -57,7 +86,24 @@ variables:
     default: ["yellow", "green"]
 ```
 
-**Note**: The pipeline uses variables to configure which taxi types to ingest. The `start_date` should be set appropriately based on your data needs.
+### Configuration Sections
+
+#### `start_date`
+The `start_date` determines the earliest date for data processing. When a full-refresh run is triggered, the interval start is automatically set to this `start_date`, and the pipeline will ingest and process all data starting from this date. This is useful for:
+- Setting a baseline for historical data backfills
+- Limiting the scope of full-refresh operations to avoid processing extremely large date ranges
+- Defining the earliest point in time your pipeline should consider
+
+#### `default_connections`
+This section initializes database connections that will be used throughout the pipeline. In this case, it initializes a DuckDB instance and provides a connection cursor named `duckdb-default` that can be referenced by assets. The connection name (`duckdb-default`) must match the connection name specified in your `.bruin.yml` file.
+
+#### `variables`
+Pipeline-level custom variables allow you to configure reusable values that can be accessed across all assets in the pipeline. Variables can be:
+- **Used in Python assets**: Accessed via the `BRUIN_VARS` environment variable (parsed as JSON)
+- **Used in SQL assets**: Referenced using Jinja templating syntax (e.g., `{{ taxi_types }}`)
+- **Overridden at runtime**: Passed via command-line arguments when running the pipeline
+
+In this pipeline, the `taxi_types` variable allows you to configure which taxi types to ingest (yellow, green, or both) without modifying the asset code.
 
 ## Asset Specifications
 
@@ -68,34 +114,29 @@ variables:
 - **Strategy**: `create+replace`
 - **Connection**: `duckdb-default`
 - **Purpose**: Ingest raw trip data from HTTP parquet files using Python
-- **Key Requirements**:
-  - Use `requests` library to download parquet files from HTTP URLs
-  - Loop through all months between `start_date` and `end_date`
-  - Read parquet files into Pandas DataFrames using `pd.read_parquet()`
-  - **Preserves original column names**: The ingestion layer keeps data as-is from parquet files (e.g., `vendor_id`, `tpep_pickup_datetime`, `pu_location_id`). Column normalization happens in tier_1.
-  - Add `taxi_type` column from pipeline variables (default: `["yellow", "green"]`)
-  - Add `extracted_at` timestamp column to track when data was extracted
-  - Combine all DataFrames using `pd.concat()` and return for Bruin materialization
-  - Handle date range to month conversion using `generate_month_range()` function:
-    - Reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (YYYY-MM-DD format)
-    - Generates list of months between start and end (inclusive)
-    - Example: 2021-12-01 to 2022-01-01 → ingest 2 months (Dec 2021 and Jan 2022)
-- **Dependencies**: `pandas`, `requests`, `python-dateutil`, `pyarrow`
-- **Function**: `materialize()` - returns Pandas DataFrame
-- **Date Handling**: 
-  - Bruin provides dates via `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables in YYYY-MM-DD format
-  - Uses `generate_month_range()` to convert date ranges to month lists
-  - Raises error if no dataframes are successfully downloaded
+
+**Python Materialization Overview**:
+Bruin's Python materialization allows you to write Python code that returns a Pandas DataFrame, which Bruin automatically materializes into a database table. This approach is beneficial because:
+- **No manual database operations**: You don't need to use DuckDB's Python library directly or write SQL to create/insert data
+- **Automatic schema handling**: Bruin infers the schema from your DataFrame and creates the table accordingly
+- **Consistent with SQL assets**: The materialized table can be referenced by SQL assets just like any other table
+- **Simplified data processing**: You can focus on data extraction and transformation logic without worrying about database connection management
+
+The `materialize()` function is required and must return a Pandas DataFrame. Bruin calls this function, receives the DataFrame, and handles all the database operations to store it as a table based on the materialization strategy.
+
+**Bruin Configuration**:
+- Preserves original column names from parquet files (column normalization happens in tier_1)
+- Adds `taxi_type` column from pipeline variables
+- Adds `extracted_at` timestamp column
+- Uses `create+replace` strategy to fully refresh the table on each run
 
 #### `ingestion.taxi_zone_lookup`
 - **Type**: `duckdb.sql`
 - **Strategy**: `truncate+insert`
 - **Purpose**: Load taxi zone lookup table from HTTP CSV
-- **Key Requirements**:
-  - Use `read_csv()` with `header=true, auto_detect=true`
-  - Filter out NULL location_id values
+- **Bruin Configuration**:
   - Primary key: `location_id` (non-nullable)
-  - Columns: `location_id`, `borough`, `zone`, `service_zone` (lowercase column names)
+  - Strategy: `truncate+insert` - deletes all existing rows and inserts new data on each run
 
 ### 2. Tier 1: Raw Data Storage
 
@@ -105,20 +146,21 @@ variables:
 - **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
 - **Purpose**: Store raw ingested data from Python ingestion table to persistent storage with normalized column names
-- **Key Requirements**:
-  - Read from `ingestion.ingest_trips_python`
-  - **Column Normalization**: Transform source column names to more human-readable, lowercase formats:
-    - `vendor_id` → `vendorid`
-    - `tpep_pickup_datetime` → `pickup_time` (cast to TIMESTAMP)
-    - `tpep_dropoff_datetime` → `dropoff_time` (cast to TIMESTAMP)
-    - `pu_location_id` → `pickup_location_id`
-    - `do_location_id` → `dropoff_location_id`
-    - `ratecode_id` → `ratecodeid`
-  - Filter by `start_datetime` and `end_datetime` using month-level truncation
-  - Add `loaded_at` timestamp column to track when data was loaded into tier_1
-  - Preserve `extracted_at` timestamp from ingestion layer
-  - Filter out NULL `pickup_time` values
-  - Cast datetime columns to TIMESTAMP type for proper date handling
+
+**Time-Interval Strategy**:
+The `time_interval` strategy is designed for incremental processing based on time-based keys. How it works:
+- Bruin automatically calculates a date range based on the run parameters (`start_datetime` and `end_datetime`)
+- It deletes all rows in the target table where the `incremental_key` (pickup_time) falls within this date range
+- Then it inserts the new data from the query results for that same date range
+- This ensures efficient updates: only the affected time period is processed, not the entire table
+
+Why we chose it: This strategy is ideal for time-series data where we want to reprocess specific date ranges (e.g., to handle late-arriving data or corrections) without affecting other time periods.
+
+**Bruin Configuration**:
+- Reads from `ingestion.ingest_trips_python`
+- Normalizes column names (e.g., `tpep_pickup_datetime` → `pickup_time`)
+- Adds `loaded_at` timestamp column
+- Preserves `extracted_at` timestamp from ingestion layer
 
 ### 3. Tier 2: Cleaned & Enriched Data
 
@@ -129,15 +171,16 @@ variables:
 - **Time Granularity**: `timestamp`
 - **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pickup_location_id`, `dropoff_location_id`, `taxi_type`)
 - **Purpose**: Clean, deduplicate, and enrich trip data
-- **Key Requirements**:
-  - Read from `tier_1.trips_historic`
-  - Deduplicate using `ROW_NUMBER()` window function with composite key
-  - Calculate `trip_duration_seconds` (dropoff - pickup) using `EXTRACT(EPOCH FROM ...)`
-  - Join with `ingestion.taxi_zone_lookup` for pickup and dropoff locations (LEFT JOIN to preserve all trips)
-  - Select columns: datetime fields, location IDs, taxi_type, trip metrics, location names (borough, zone)
-  - Add `updated_at` timestamp column to track when data was last updated in tier_2
-  - Preserve `extracted_at` timestamp from tier_1
-  - Filter by date range using month-level truncation and data quality checks (all primary key columns must be NOT NULL)
+
+**Time-Interval Strategy**:
+Same as tier_1 - processes data incrementally based on the pickup_time date range, allowing efficient updates to cleaned and enriched data.
+
+**Bruin Configuration**:
+- Reads from `tier_1.trips_historic`
+- Enriches with location data from `ingestion.taxi_zone_lookup`
+- Adds `updated_at` timestamp column
+- Preserves `extracted_at` timestamp from tier_1
+- All primary key columns are non-nullable
 
 ### 4. Tier 3: Reports
 
@@ -148,29 +191,15 @@ variables:
 - **Time Granularity**: `timestamp`
 - **Primary Key**: Composite (`taxi_type`, `month_date`)
 - **Purpose**: Generate monthly summary reports
-- **Key Requirements**:
-  - Read from `tier_2.trips_summary`
-  - Group by `taxi_type` and `DATE_TRUNC('month', pickup_time)` AS `month_date`
-  - Calculate metrics:
-    - `trip_duration_avg`, `trip_duration_total`
-    - `total_amount_avg`, `total_amount_total`
-    - `tip_amount_avg`, `tip_amount_total`
-    - `total_trips` (COUNT)
-  - Aggregate `extracted_at` using `MAX(extracted_at)` to get latest extraction time for the month
-  - Add `updated_at` timestamp column to track when data was last updated in tier_3
-  - Filter by date range using month-level truncation and ensure metrics are not NULL
 
-## SQL Style Requirements
+**Time-Interval Strategy**:
+Uses `month_date` as the incremental key, which is the first day of each month. This allows reprocessing of specific months (e.g., if source data is corrected) without affecting other months.
 
-Follow the Bruin SQL style guide:
-- **Trailing Commas**: All SELECT columns end with comma (even last one)
-- **Alias Alignment**: All column aliases aligned
-- **WHERE Clauses**: Start with `WHERE 1=1`
-- **CTE Format**: First CTE has no leading comma, subsequent CTEs start with comma
-- **Final CTE**: Always have a `final` CTE before final SELECT
-- **Keywords**: All SQL keywords UPPERCASE
-- **Line Length**: Max 120 characters
-- **Indentation**: 2 spaces
+**Bruin Configuration**:
+- Reads from `tier_2.trips_summary`
+- Aggregates data by `taxi_type` and month
+- Adds `updated_at` timestamp column
+- Aggregates `extracted_at` using MAX to track latest extraction time per month
 
 ## Testing Instructions
 
