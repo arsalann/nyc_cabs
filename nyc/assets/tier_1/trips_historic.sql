@@ -39,16 +39,13 @@ columns:
   - name: trip_distance
     type: DOUBLE
     description: The elapsed trip distance in miles reported by the taximeter
-  - name: ratecodeid
-    type: DOUBLE
-    description: The final rate code in effect at the end of the trip (1=Standard rate, 2=JFK, 3=Newark, 4=Nassau or Westchester, 5=Negotiated fare, 6=Group ride)
   - name: store_and_fwd_flag
     type: VARCHAR
     description: This flag indicates whether the trip record was held in vehicle memory before sending to the vendor (Y=store and forward; N=not a store and forward trip)
-  - name: pulocationid
+  - name: pickup_location_id
     type: INTEGER
     description: TLC Taxi Zone in which the taximeter was engaged
-  - name: dolocationid
+  - name: dropoff_location_id
     type: INTEGER
     description: TLC Taxi Zone in which the taximeter was disengaged
   - name: payment_type
@@ -99,10 +96,10 @@ SELECT
   CAST(tpep_dropoff_datetime AS TIMESTAMP) AS dropoff_time,
   passenger_count,
   trip_distance,
-  ratecode_id AS ratecodeid,
+  ratecode_id,
   store_and_fwd_flag,
-  pu_location_id AS pulocationid,
-  do_location_id AS dolocationid,
+  pu_location_id AS pickup_location_id,
+  do_location_id AS dropoff_location_id,
   payment_type,
   fare_amount,
   extra,

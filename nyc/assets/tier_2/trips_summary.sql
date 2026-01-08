@@ -8,8 +8,8 @@ description: |
   to enrich data with borough and zone names.
   
   Query Operations:
-  - Step 1: Selects necessary columns from tier_1 and applies data quality filters. Ensures all primary key columns (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type) are NOT NULL, which is required for the merge strategy. Filters by date range using month-level truncation to match tier_1 logic (ingestion loads full months).
-  - Step 2: Deduplicates trips using ROW_NUMBER() window function with composite key (pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type). If duplicate trips exist, keeps the most recent record (ordered by pickup_time DESC) to handle data quality issues where trip records may have been updated/corrected.
+  - Step 1: Selects necessary columns from tier_1 and applies data quality filters. Ensures all primary key columns (pickup_time, dropoff_time, pickup_location_id, dropoff_location_id, taxi_type) are NOT NULL, which is required for the merge strategy. Filters by date range using month-level truncation to match tier_1 logic (ingestion loads full months).
+  - Step 2: Deduplicates trips using ROW_NUMBER() window function with composite key (pickup_time, dropoff_time, pickup_location_id, dropoff_location_id, taxi_type). If duplicate trips exist, keeps the most recent record (ordered by pickup_time DESC) to handle data quality issues where trip records may have been updated/corrected.
   - Step 3: Filters to keep only deduplicated records (rn=1) and calculates trip duration in seconds using EXTRACT(EPOCH FROM (dropoff_time - pickup_time)). Trip duration is a derived metric calculated once here to avoid recalculating in downstream queries.
   - Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table. LEFT JOIN ensures all trips are preserved even if location ID doesn't exist in lookup table, preserving data integrity.
   - Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table. Adds Borough and Zone names for both pickup and dropoff locations to make data more accessible for analysis and reporting.
@@ -52,12 +52,12 @@ columns:
     description: The date and time when the meter was disengaged
     primary_key: true
     nullable: false
-  - name: pulocationid
+  - name: pickup_location_id
     type: INTEGER
     description: TLC Taxi Zone in which the taximeter was engaged
     primary_key: true
     nullable: false
-  - name: dolocationid
+  - name: dropoff_location_id
     type: INTEGER
     description: TLC Taxi Zone in which the taximeter was disengaged
     primary_key: true
@@ -112,8 +112,8 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
   SELECT
     pickup_time,
     dropoff_time,
-    pulocationid,
-    dolocationid,
+    pickup_location_id,
+    dropoff_location_id,
     taxi_type,
     trip_distance,
     passenger_count,
@@ -126,8 +126,8 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
     AND pickup_time IS NOT NULL
     AND dropoff_time IS NOT NULL
-    AND pulocationid IS NOT NULL
-    AND dolocationid IS NOT NULL
+    AND pickup_location_id IS NOT NULL
+    AND dropoff_location_id IS NOT NULL
     AND taxi_type IS NOT NULL
 )
 
@@ -135,7 +135,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
   SELECT
     *,
     ROW_NUMBER() OVER (
-      PARTITION BY pickup_time, dropoff_time, pulocationid, dolocationid, taxi_type
+      PARTITION BY pickup_time, dropoff_time, pickup_location_id, dropoff_location_id, taxi_type
       ORDER BY pickup_time DESC
     ) AS rn,
   FROM raw_trips
@@ -145,8 +145,8 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
   SELECT
     pickup_time,
     dropoff_time,
-    pulocationid,
-    dolocationid,
+    pickup_location_id,
+    dropoff_location_id,
     taxi_type,
     trip_distance,
     passenger_count,
@@ -167,15 +167,15 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     pickup_lookup.zone AS pickup_zone,
   FROM cleaned_trips AS ct
   LEFT JOIN ingestion.taxi_zone_lookup AS pickup_lookup
-    ON ct.pulocationid = pickup_lookup.location_id
+    ON ct.pickup_location_id = pickup_lookup.location_id
 )
 
 , final AS ( -- Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table
   SELECT
     twl.pickup_time,
     twl.dropoff_time,
-    twl.pulocationid,
-    twl.dolocationid,
+    twl.pickup_location_id,
+    twl.dropoff_location_id,
     twl.taxi_type,
     twl.trip_distance,
     twl.passenger_count,
@@ -191,14 +191,14 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     CURRENT_TIMESTAMP AS updated_at,
   FROM trips_with_lookup AS twl
   LEFT JOIN ingestion.taxi_zone_lookup AS dropoff_lookup
-    ON twl.dolocationid = dropoff_lookup.location_id
+    ON twl.dropoff_location_id = dropoff_lookup.location_id
 )
 
 SELECT
   pickup_time,
   dropoff_time,
-  pulocationid,
-  dolocationid,
+  pickup_location_id,
+  dropoff_location_id,
   taxi_type,
   trip_distance,
   passenger_count,

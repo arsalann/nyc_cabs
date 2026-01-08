@@ -28,16 +28,13 @@ The pipeline extracts NYC taxi trip data from HTTP parquet files, cleans and tra
 ```
 nyc/
 ├── pipeline.yml
-├── macros/
-│   └── ingestion.sql
 └── assets/
     ├── ingestion/
-    │   ├── ingest_trips_python.py (recommended)
-    │   ├── ingest_trips_bulk.sql (alternative)
-    │   ├── ingest_trips_single.sql (single month)
+    │   ├── ingest_trips_python.py
+    │   ├── requirements.txt
     │   └── taxi_zone_lookup.sql
     ├── tier_1/
-    │   └── trips.sql
+    │   └── trips_historic.sql
     ├── tier_2/
     │   └── trips_summary.sql
     └── tier_3/
@@ -49,65 +46,46 @@ nyc/
 ```yaml
 name: nyc-taxi-pipelines
 schedule: monthly
-start_date: "2024-01-01"  # Use recent date to avoid large full-refresh queries
-catchup: false
+start_date: "2022-01-01"
 default_connections:
   duckdb: "duckdb-default"
-default:
-  type: duckdb.sql
+variables:
+  taxi_types:
+    type: array
+    items:
+      type: string
+    default: ["yellow", "green"]
 ```
 
-**Note**: `start_date` should be set to a recent date (e.g., 2024-01-01) to avoid generating extremely large UNION ALL queries during full-refresh operations.
+**Note**: The pipeline uses variables to configure which taxi types to ingest. The `start_date` should be set appropriately based on your data needs.
 
 ## Asset Specifications
 
 ### 1. Ingestion Layer
 
-#### `ingestion.ingest_trips_python` (Recommended) ⭐
+#### `ingestion.ingest_trips_python`
 - **Type**: `python`
-- **Strategy**: `create+replace` (Python assets use `create+replace`, not `truncate+insert`)
+- **Strategy**: `create+replace`
 - **Connection**: `duckdb-default`
 - **Purpose**: Ingest raw trip data from HTTP parquet files using Python
 - **Key Requirements**:
   - Use `requests` library to download parquet files from HTTP URLs
   - Loop through all months between `start_date` and `end_date`
   - Read parquet files into Pandas DataFrames using `pd.read_parquet()`
-  - **Column Normalization**: Parquet files use snake_case with underscores (e.g., `vendor_id`, `pu_location_id`), but tier_1 expects lowercase without underscores (e.g., `vendorid`, `pulocationid`). The asset includes a `normalize_column_names()` function to handle this mapping.
-  - Add `taxi_type` column (default: `'yellow'`)
+  - **Preserves original column names**: The ingestion layer keeps data as-is from parquet files (e.g., `vendor_id`, `tpep_pickup_datetime`, `pu_location_id`). Column normalization happens in tier_1.
+  - Add `taxi_type` column from pipeline variables (default: `["yellow", "green"]`)
+  - Add `extracted_at` timestamp column to track when data was extracted
   - Combine all DataFrames using `pd.concat()` and return for Bruin materialization
   - Handle date range to month conversion using `generate_month_range()` function:
-    - Reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (already in YYYY-MM-DD format)
-    - Extracts first 10 characters to get YYYY-MM-DD format
+    - Reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (YYYY-MM-DD format)
     - Generates list of months between start and end (inclusive)
     - Example: 2021-12-01 to 2022-01-01 → ingest 2 months (Dec 2021 and Jan 2022)
 - **Dependencies**: `pandas`, `requests`, `python-dateutil`, `pyarrow`
-- **Function**: `materialize(start_date=None, end_date=None, **kwargs)` - returns Pandas DataFrame
+- **Function**: `materialize()` - returns Pandas DataFrame
 - **Date Handling**: 
   - Bruin provides dates via `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables in YYYY-MM-DD format
-  - Falls back to function parameters or other environment variables if needed
-  - Raises error if dates are not provided
-
-#### `ingestion.ingest_trips_bulk` (Alternative SQL approach)
-- **Type**: `duckdb.sql`
-- **Strategy**: `truncate+insert`
-- **Purpose**: Ingest raw trip data from HTTP parquet files using SQL UNION ALL
-- **Key Requirements**:
-  - Use `read_parquet()` to fetch files from HTTP URLs
-  - Generate UNION ALL statements for all months in the date range
-  - Add `taxi_type` column (hardcoded to `'yellow'` for now)
-  - Handle date range to month conversion using Jinja
-  - Wrap in CTE structure: `WITH parquet_union AS (...) SELECT * FROM parquet_union`
-- **Note**: May have parser issues with very large date ranges during full-refresh
-
-#### `ingestion.ingest_trips_single` (Single month only)
-- **Type**: `duckdb.sql`
-- **Strategy**: `truncate+insert`
-- **Purpose**: Ingest raw trip data for a single month (uses interval start date's month)
-- **Key Requirements**:
-  - Use `read_parquet()` to fetch single month file
-  - Extract month from `start_date` only
-  - Add `taxi_type` column
-- **Use Case**: Incremental processing of one month at a time
+  - Uses `generate_month_range()` to convert date ranges to month lists
+  - Raises error if no dataframes are successfully downloaded
 
 #### `ingestion.taxi_zone_lookup`
 - **Type**: `duckdb.sql`
@@ -115,9 +93,9 @@ default:
 - **Purpose**: Load taxi zone lookup table from HTTP CSV
 - **Key Requirements**:
   - Use `read_csv()` with `header=true, auto_detect=true`
-  - Filter out NULL LocationID values
-  - Primary key: `LocationID` (non-nullable)
-  - Columns: `LocationID`, `Borough`, `Zone`, `service_zone`
+  - Filter out NULL location_id values
+  - Primary key: `location_id` (non-nullable)
+  - Columns: `location_id`, `borough`, `zone`, `service_zone` (lowercase column names)
 
 ### 2. Tier 1: Raw Data Storage
 
@@ -126,14 +104,21 @@ default:
 - **Strategy**: `time_interval`
 - **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
-- **Interval Modifiers**: `start: -3d, end: 1d`
-- **Purpose**: Store raw ingested data from Python ingestion table to persistent storage
+- **Purpose**: Store raw ingested data from Python ingestion table to persistent storage with normalized column names
 - **Key Requirements**:
   - Read from `ingestion.ingest_trips_python`
-  - Filter by `start_datetime` and `end_datetime` (from interval modifiers)
-  - Preserve all original columns from source (columns already normalized by Python asset)
-  - Handle schema evolution (e.g., `cbd_congestion_fee` column in newer data)
+  - **Column Normalization**: Transform source column names to more human-readable, lowercase formats:
+    - `vendor_id` → `vendorid`
+    - `tpep_pickup_datetime` → `pickup_time` (cast to TIMESTAMP)
+    - `tpep_dropoff_datetime` → `dropoff_time` (cast to TIMESTAMP)
+    - `pu_location_id` → `pickup_location_id`
+    - `do_location_id` → `dropoff_location_id`
+    - `ratecode_id` → `ratecodeid`
+  - Filter by `start_datetime` and `end_datetime` using month-level truncation
+  - Add `loaded_at` timestamp column to track when data was loaded into tier_1
+  - Preserve `extracted_at` timestamp from ingestion layer
   - Filter out NULL `pickup_time` values
+  - Cast datetime columns to TIMESTAMP type for proper date handling
 
 ### 3. Tier 2: Cleaned & Enriched Data
 
@@ -142,16 +127,17 @@ default:
 - **Strategy**: `time_interval`
 - **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
-- **Interval Modifiers**: `start: -3d, end: 1d`
-- **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pulocationid`, `dolocationid`, `taxi_type`)
+- **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pickup_location_id`, `dropoff_location_id`, `taxi_type`)
 - **Purpose**: Clean, deduplicate, and enrich trip data
 - **Key Requirements**:
   - Read from `tier_1.trips_historic`
-  - Deduplicate using `ROW_NUMBER()` window function
-  - Calculate `trip_duration_seconds` (dropoff - pickup)
-  - Join with `ingestion.taxi_zone_lookup` for pickup and dropoff locations
-  - Select columns: datetime fields, location IDs, taxi_type, trip metrics, location names
-  - Filter by interval modifiers and data quality checks
+  - Deduplicate using `ROW_NUMBER()` window function with composite key
+  - Calculate `trip_duration_seconds` (dropoff - pickup) using `EXTRACT(EPOCH FROM ...)`
+  - Join with `ingestion.taxi_zone_lookup` for pickup and dropoff locations (LEFT JOIN to preserve all trips)
+  - Select columns: datetime fields, location IDs, taxi_type, trip metrics, location names (borough, zone)
+  - Add `updated_at` timestamp column to track when data was last updated in tier_2
+  - Preserve `extracted_at` timestamp from tier_1
+  - Filter by date range using month-level truncation and data quality checks (all primary key columns must be NOT NULL)
 
 ### 4. Tier 3: Reports
 
@@ -160,18 +146,19 @@ default:
 - **Strategy**: `time_interval`
 - **Incremental Key**: `month_date`
 - **Time Granularity**: `timestamp`
-- **Interval Modifiers**: `start: -3M, end: 1M`
 - **Primary Key**: Composite (`taxi_type`, `month_date`)
 - **Purpose**: Generate monthly summary reports
 - **Key Requirements**:
   - Read from `tier_2.trips_summary`
-  - Group by `taxi_type` and `DATE_TRUNC('month', pickup_time)`
+  - Group by `taxi_type` and `DATE_TRUNC('month', pickup_time)` AS `month_date`
   - Calculate metrics:
     - `trip_duration_avg`, `trip_duration_total`
     - `total_amount_avg`, `total_amount_total`
     - `tip_amount_avg`, `tip_amount_total`
     - `total_trips` (COUNT)
-  - Filter by interval modifiers and ensure metrics are not NULL
+  - Aggregate `extracted_at` using `MAX(extracted_at)` to get latest extraction time for the month
+  - Add `updated_at` timestamp column to track when data was last updated in tier_3
+  - Filter by date range using month-level truncation and ensure metrics are not NULL
 
 ## SQL Style Requirements
 
@@ -189,7 +176,7 @@ Follow the Bruin SQL style guide:
 
 ### 1. Validate Pipeline
 ```bash
-bruin validate ./nyc/pipeline.yml --environment default
+bruin validate ./nyc/pipeline.yml --environment dev
 ```
 
 ### 2. Test Individual Assets (Recommended)
@@ -203,7 +190,7 @@ bruin run ./nyc/assets/ingestion/ingest_trips_python.py \
 bruin run ./nyc/assets/ingestion/taxi_zone_lookup.sql
 
 # Test tier_1
-bruin run ./nyc/assets/tier_1/trips.sql \
+bruin run ./nyc/assets/tier_1/trips_historic.sql \
   --start-date 2021-01-01 \
   --end-date 2022-02-28
 
@@ -224,7 +211,7 @@ bruin run ./nyc/assets/tier_3/report_trips_monthly.sql \
 bruin run ./nyc/pipeline.yml \
   --start-date 2021-01-01 \
   --end-date 2022-02-28 \
-  --environment default
+  --environment dev
 
 # Verify 14 months of data in final report
 bruin query --connection duckdb-default --query "SELECT COUNT(*) as month_count FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28'"
@@ -256,47 +243,24 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
 
 ## Known Issues & Workarounds
 
-### Python Asset Date Handling
-- **Status**: ✅ Resolved
-- **Implementation**: 
-  - The Python asset reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (provided by Bruin in YYYY-MM-DD format)
-  - Falls back to function parameters or other environment variables if needed
-  - Uses simple string slicing (`[:10]`) to extract YYYY-MM-DD format since dates are already in the correct format
-  - Includes a clean `generate_month_range()` function to convert date ranges to month lists
-  - Raises clear error if dates are not provided
-
-### SQL Bulk Ingestion Parser Error
-- **Issue**: Using `--full-refresh` flag causes "Parser Error: syntax error at or near SELECT" in SQL bulk ingestion assets
-- **Status**: Known issue with large UNION ALL queries
-- **Workaround**: 
-  - Use Python ingestion (`ingest_trips_python`) instead (recommended)
-  - Or use single-month ingestion (`ingest_trips_single`) for incremental processing
-  - Run without `--full-refresh` for normal operations
-
-### Schema Evolution & Column Mapping
-- **Issue**: Parquet file column names use snake_case with underscores (e.g., `vendor_id`, `pu_location_id`), but tier_1 schema expects lowercase without underscores (e.g., `vendorid`, `pulocationid`)
+### Date Type Casting in DATE_TRUNC
+- **Issue**: DATE_TRUNC requires explicit type casting when using template variables
 - **Solution**: 
-  - Python asset includes `normalize_column_names()` function that maps:
-    - `vendor_id` → `vendorid`
-    - `ratecode_id` → `ratecodeid`
-    - `pu_location_id` → `pulocationid`
-    - `do_location_id` → `dolocationid`
-  - Only renames columns that exist in the DataFrame (handles missing columns gracefully)
-  - SQL assets use conditional Jinja: `{% if 'cbd_congestion_fee' in get_columns_in_relation('table_name') %}`
+  - Cast template variables to TIMESTAMP: `CAST('{{ start_datetime }}' AS TIMESTAMP)`
+  - Cast source datetime columns to TIMESTAMP: `CAST(tpep_pickup_datetime AS TIMESTAMP)`
+  - This ensures proper type resolution in DuckDB
 
 ## Implementation Checklist
 
-- [ ] Create `nyc/pipeline.yml` with correct configuration
-- [ ] Create `nyc/macros/ingestion.sql` (optional - can inline Jinja in asset)
-- [ ] Create `ingestion.ingest_trips_python.py` with date-to-month conversion logic and column normalization
+- [ ] Create `nyc/pipeline.yml` with correct configuration and variables
+- [ ] Create `ingestion.ingest_trips_python.py` with date-to-month conversion logic
 - [ ] Create `ingestion.taxi_zone_lookup.sql` with CSV ingestion
-- [ ] Create `tier_1.trips_historic.sql` with time_interval strategy
+- [ ] Create `tier_1.trips_historic.sql` with time_interval strategy and column normalization
 - [ ] Create `tier_2.trips_summary.sql` with deduplication and enrichment
 - [ ] Create `tier_3.report_trips_monthly.sql` with monthly aggregations
 - [ ] Add all required Bruin metadata (name, uri, description, owner, tags, columns)
 - [ ] Set primary keys and nullable constraints correctly
-- [ ] Add interval modifiers where needed
-- [ ] Follow SQL style guide (trailing commas, alias alignment, etc.)
+- [ ] Add timestamp tracking columns (extracted_at, loaded_at, updated_at)
 - [ ] Test individual assets
 - [ ] Test full pipeline with different date ranges
 - [ ] Verify data quality and row counts
@@ -308,11 +272,19 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
    - Use `generate_month_range()` function to convert date range to list of (year, month) tuples
    - Handles cross-year ranges correctly (e.g., 2021-12-01 to 2022-01-01 → Dec 2021, Jan 2022)
 2. **Column Normalization**: 
-   - Parquet files use snake_case with underscores (`vendor_id`, `pu_location_id`)
-   - Tier_1 expects lowercase without underscores (`vendorid`, `pulocationid`)
-   - Python asset includes `normalize_column_names()` function to handle this mapping
-3. **Taxi Type**: Defaults to `'yellow'`, can be overridden via environment variable or kwargs
-4. **Deduplication**: Use `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` and filter `rn = 1`
-5. **Lookup Joins**: Use `LEFT JOIN` to retain all trips even if LocationID not found
-6. **Interval Modifiers**: Use `-3d` start and `1d` end to handle late-arriving data
-7. **Schema Handling**: Use conditional Jinja to handle columns that may not exist in all data files
+   - **Ingestion Layer**: Preserves original column names from parquet files as-is (e.g., `vendor_id`, `tpep_pickup_datetime`, `pu_location_id`)
+   - **Tier_1 Layer**: Transforms column names to more human-readable, lowercase formats for better readability and consistency:
+     - `vendor_id` → `vendorid`
+     - `tpep_pickup_datetime` → `pickup_time`
+     - `tpep_dropoff_datetime` → `dropoff_time`
+     - `pu_location_id` → `pickup_location_id`
+     - `do_location_id` → `dropoff_location_id`
+     - `ratecode_id` → `ratecodeid`
+   - This separation allows the ingestion layer to process data as-is, while tier_1 standardizes the schema for downstream consumption
+3. **Taxi Types**: Configured via pipeline variables (default: `["yellow", "green"]`), accessible in Python assets via `BRUIN_VARS` environment variable
+4. **Deduplication**: Use `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` and filter `rn = 1` to keep most recent record for each unique trip
+5. **Lookup Joins**: Use `LEFT JOIN` to retain all trips even if location_id not found in lookup table
+6. **Timestamp Tracking**: 
+   - `extracted_at`: Set in ingestion layer when data is downloaded
+   - `loaded_at`: Set in tier_1 when data is loaded into persistent storage
+   - `updated_at`: Set in tier_2 and tier_3 when data is updated/refreshed
