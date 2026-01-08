@@ -58,11 +58,13 @@ materialization:
 {% set taxi_type = 'yellow' %}
 
 -- Step 3: Generate SQL query using CTE structure
-WITH parquet_union AS (
 {% if start_year == end_year %}
 {% set first = true %}
+
+WITH parquet_union AS (
 {% for month in range(start_month, end_month + 1) %}
 {% if first %}
+
 SELECT
   *,
   '{{ taxi_type }}' AS taxi_type,
