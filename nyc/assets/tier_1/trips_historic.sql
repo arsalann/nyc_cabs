@@ -33,12 +33,18 @@ columns:
   - name: dropoff_time
     type: TIMESTAMP
     description: The date and time when the meter was disengaged
+    checks:
+      - expression: dropoff_time > pickup_time
+        description: Dropoff time must be after pickup time
   - name: passenger_count
     type: DOUBLE
     description: The number of passengers in the vehicle (entered by the driver)
   - name: trip_distance
     type: DOUBLE
     description: The elapsed trip distance in miles reported by the taximeter
+    checks:
+      - expression: trip_distance >= 0
+        description: Trip distance must be non-negative
   - name: store_and_fwd_flag
     type: VARCHAR
     description: This flag indicates whether the trip record was held in vehicle memory before sending to the vendor (Y=store and forward; N=not a store and forward trip)
@@ -87,6 +93,16 @@ columns:
   - name: loaded_at
     type: TIMESTAMP
     description: Timestamp when the data was loaded into tier_1
+
+quality_checks:
+  - name: dropoff_after_pickup
+    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE dropoff_time <= pickup_time
+    expectation: 0
+    description: Validates that dropoff_time is after pickup_time (trip cannot end before it starts)
+  - name: non_negative_trip_distance
+    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE trip_distance < 0
+    expectation: 0
+    description: Ensures trip_distance is non-negative
 
 @bruin */
 
