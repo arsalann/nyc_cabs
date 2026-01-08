@@ -1,6 +1,6 @@
 name: nyc-taxi-pipelines
 schedule: monthly
-start_date: "2022-01-01"
+start_date: "2021-01-01"
 
 default_connections:
   duckdb: "duckdb-default"

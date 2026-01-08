@@ -8,7 +8,7 @@ description: |
   as well as total trip count.
   
   Query Operations:
-  - Step 1: Extracts month from pickup_time using DATE_TRUNC('month', pickup_time) to create grouping key for monthly aggregation (e.g., 2022-03-15 14:30:00 → 2022-03-01 00:00:00). Applies data quality filters to ensure trip_duration_seconds, total_amount, and tip_amount are NOT NULL (filtering out NULLs ensures accurate aggregations as NULL values would skew averages). Filters by date range using month-level truncation to match tier_1/tier_2 logic.
+  - Step 1: Extracts month from pickup_time using DATE_TRUNC('month', pickup_time) to create grouping key for monthly aggregation (e.g., 2022-03-15 14:30:00 → 2022-03-01 00:00:00). Applies data quality filters to ensure trip_duration_seconds, total_amount, and tip_amount are NOT NULL (filtering out NULLs ensures accurate aggregations as NULL values would skew averages). Filters by date range using month-level truncation to match tier_1/tier_2 logic. Filters for payment types 0, 1, or 2 (Flex Fare trip, Credit card, Cash) to include only trips that were actually charged, excluding No charge (3), Dispute (4), Unknown (5), and Voided trip (6) payments.
   - Step 2: Aggregates metrics by taxi_type and month_date using GROUP BY, creating one row per taxi type per month. Calculates both average and total metrics: trip_duration_avg and trip_duration_total (average and total trip duration in seconds), total_amount_avg and total_amount_total (average fare per trip and total revenue for the month), tip_amount_avg and tip_amount_total (average tip per trip and total tips for the month), and total_trips (count of trips in the month). Both averages and totals are calculated because averages are useful for understanding typical trip characteristics while totals are useful for understanding overall business metrics (revenue, volume).
   - Step 3: Final select with all required columns in proper order (primary keys first, then metrics in logical groups).
   
@@ -97,7 +97,7 @@ custom_checks:
 
 WITH
 
-trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data for aggregation
+trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data for aggregation, filtering for only charged trips
   SELECT
     taxi_type,
     DATE_TRUNC('month', pickup_time) AS month_date,
@@ -111,6 +111,8 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     AND trip_duration_seconds IS NOT NULL
     AND total_amount IS NOT NULL
     AND tip_amount IS NOT NULL
+    AND dropoff_time > pickup_time
+    AND payment_description IN ('flex_fare', 'credit_card', 'cash')  -- Only include trips that were actually charged
 )
 
 , monthly_aggregates AS ( -- Step 2: Aggregate metrics by taxi type and month
@@ -126,7 +128,6 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     COUNT(*) AS total_trips,
     MAX(extracted_at) AS extracted_at,
   FROM trips_by_month
-  WHERE 1=1
   GROUP BY
     taxi_type,
     month_date

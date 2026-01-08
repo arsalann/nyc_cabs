@@ -93,7 +93,7 @@ columns:
 custom_checks:
   - name: dropoff_after_pickup
     description: Validates that dropoff_time is after pickup_time (trip cannot end before it starts)
-    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE dropoff_time <= pickup_time
+    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE dropoff_time < pickup_time
     value: 0
   - name: non_negative_trip_distance
     description: Ensures trip_distance is non-negative

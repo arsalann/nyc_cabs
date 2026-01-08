@@ -13,6 +13,7 @@ description: |
   - Step 3: Filters to keep only deduplicated records (rn=1) and calculates trip duration in seconds using EXTRACT(EPOCH FROM (dropoff_time - pickup_time)). Trip duration is a derived metric calculated once here to avoid recalculating in downstream queries.
   - Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table. LEFT JOIN ensures all trips are preserved even if location ID doesn't exist in lookup table, preserving data integrity.
   - Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table. Adds Borough and Zone names for both pickup and dropoff locations to make data more accessible for analysis and reporting.
+  - Step 6: Enriches trips with payment type information using LEFT JOIN with payment_type_lookup table. Adds payment_description to make payment information human-readable for analysis and reporting.
   
   Aggregation Level: Individual trip records with location enrichment and deduplication applied.
   
@@ -32,8 +33,9 @@ tags:
   - cleaned-data
 
 depends:
-  - tier_1.trips_historic
   - ingestion.taxi_zone_lookup
+  - tier_1.trips_historic
+  - tier_1.payment_type_lookup
 
 materialization:
   type: table
@@ -103,6 +105,12 @@ columns:
       - name: positive
       - name: max
         value: 86400
+  - name: payment_type
+    type: DOUBLE
+    description: Numeric code signifying how the passenger paid for the trip (0=Flex Fare trip, 1=Credit card, 2=Cash, 3=No charge, 4=Dispute, 5=Unknown, 6=Voided trip)
+  - name: payment_description
+    type: VARCHAR
+    description: Human-readable description of the payment type
   - name: extracted_at
     type: TIMESTAMP
     description: Timestamp when the data was extracted from the source
@@ -136,6 +144,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     fare_amount,
     tip_amount,
     total_amount,
+    payment_type,
     extracted_at,
   FROM tier_1.trips_historic
   WHERE 1=1
@@ -169,11 +178,16 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     fare_amount,
     tip_amount,
     total_amount,
+    payment_type,
     extracted_at,
     EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) AS trip_duration_seconds,
   FROM deduplicated_trips
   WHERE 1=1
     AND rn = 1
+    -- filter out zero durations (trip cannot end at the same time it starts)
+    AND EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) > 0
+    -- filter out outlier durations that are too long - 8 hours (28800 seconds)
+    AND EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) < 28800
 )
 
 , trips_with_lookup AS ( -- Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table
@@ -186,7 +200,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     ON ct.pickup_location_id = pickup_lookup.location_id
 )
 
-, final AS ( -- Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table
+, trips_with_payment AS ( -- Step 6: Enriches trips with payment type information using LEFT JOIN with payment_type_lookup table
   SELECT
     twl.pickup_time,
     twl.dropoff_time,
@@ -203,11 +217,38 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     dropoff_lookup.borough AS dropoff_borough,
     dropoff_lookup.zone AS dropoff_zone,
     twl.trip_duration_seconds,
+    twl.payment_type,
+    payment_lookup.payment_description,
     twl.extracted_at,
-    CURRENT_TIMESTAMP AS updated_at,
   FROM trips_with_lookup AS twl
   LEFT JOIN ingestion.taxi_zone_lookup AS dropoff_lookup
     ON twl.dropoff_location_id = dropoff_lookup.location_id
+  LEFT JOIN tier_1.payment_type_lookup AS payment_lookup
+    ON CAST(twl.payment_type AS INTEGER) = payment_lookup.payment_type_id
+)
+
+, final AS ( -- Step 7: Final select with all required columns
+  SELECT
+    pickup_time,
+    dropoff_time,
+    pickup_location_id,
+    dropoff_location_id,
+    taxi_type,
+    trip_distance,
+    passenger_count,
+    fare_amount,
+    tip_amount,
+    total_amount,
+    pickup_borough,
+    pickup_zone,
+    dropoff_borough,
+    dropoff_zone,
+    trip_duration_seconds,
+    payment_type,
+    payment_description,
+    extracted_at,
+    CURRENT_TIMESTAMP AS updated_at,
+  FROM trips_with_payment
 )
 
 SELECT
@@ -226,6 +267,8 @@ SELECT
   dropoff_borough,
   dropoff_zone,
   trip_duration_seconds,
+  payment_type,
+  payment_description,
   extracted_at,
   updated_at,
 FROM final
