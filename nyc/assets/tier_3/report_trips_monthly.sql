@@ -72,6 +72,12 @@ columns:
   - name: total_trips
     type: BIGINT
     description: Total number of trips for the month
+  - name: extracted_at
+    type: TIMESTAMP
+    description: Maximum timestamp when the source data was extracted (latest extraction time for the month)
+  - name: updated_at
+    type: TIMESTAMP
+    description: Timestamp when the data was last updated in tier_3
 
 @bruin */
 
@@ -84,6 +90,7 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     trip_duration_seconds,
     total_amount,
     tip_amount,
+    extracted_at,
   FROM tier_2.trips_summary
   WHERE 1=1
     AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
@@ -103,6 +110,7 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     AVG(tip_amount) AS tip_amount_avg,
     SUM(tip_amount) AS tip_amount_total,
     COUNT(*) AS total_trips,
+    MAX(extracted_at) AS extracted_at,
   FROM trips_by_month
   WHERE 1=1
   GROUP BY
@@ -121,6 +129,8 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     tip_amount_avg,
     tip_amount_total,
     total_trips,
+    extracted_at,
+    CURRENT_TIMESTAMP AS updated_at,
   FROM monthly_aggregates
 )
 
@@ -134,4 +144,6 @@ SELECT
   tip_amount_avg,
   tip_amount_total,
   total_trips,
+  extracted_at,
+  updated_at,
 FROM final

@@ -97,6 +97,12 @@ columns:
   - name: trip_duration_seconds
     type: DOUBLE
     description: Calculated trip duration in seconds (dropoff time - pickup time)
+  - name: extracted_at
+    type: TIMESTAMP
+    description: Timestamp when the data was extracted from the source
+  - name: updated_at
+    type: TIMESTAMP
+    description: Timestamp when the data was last updated in tier_2
 
 @bruin */
 
@@ -114,6 +120,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     fare_amount,
     tip_amount,
     total_amount,
+    extracted_at,
   FROM tier_1.trips_historic
   WHERE 1=1
     AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
@@ -146,6 +153,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     fare_amount,
     tip_amount,
     total_amount,
+    extracted_at,
     EXTRACT(EPOCH FROM (dropoff_time - pickup_time)) AS trip_duration_seconds,
   FROM deduplicated_trips
   WHERE 1=1
@@ -179,6 +187,8 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     dropoff_lookup.Borough AS dropoff_borough,
     dropoff_lookup.Zone AS dropoff_zone,
     twl.trip_duration_seconds,
+    twl.extracted_at,
+    CURRENT_TIMESTAMP AS updated_at,
   FROM trips_with_lookup AS twl
   LEFT JOIN ingestion.taxi_zone_lookup AS dropoff_lookup
     ON twl.dolocationid = dropoff_lookup.LocationID
@@ -200,4 +210,6 @@ SELECT
   dropoff_borough,
   dropoff_zone,
   trip_duration_seconds,
+  extracted_at,
+  updated_at,
 FROM final

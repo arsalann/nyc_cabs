@@ -84,13 +84,19 @@ columns:
   - name: taxi_type
     type: VARCHAR
     description: Type of taxi (yellow or green)
+  - name: extracted_at
+    type: TIMESTAMP
+    description: Timestamp when the data was extracted from the source
+  - name: loaded_at
+    type: TIMESTAMP
+    description: Timestamp when the data was loaded into tier_1
 
 @bruin */
 
 SELECT
   vendor_id AS vendorid,
-  tpep_pickup_datetime AS pickup_time,
-  tpep_dropoff_datetime AS dropoff_time,
+  CAST(tpep_pickup_datetime AS TIMESTAMP) AS pickup_time,
+  CAST(tpep_dropoff_datetime AS TIMESTAMP) AS dropoff_time,
   passenger_count,
   trip_distance,
   ratecode_id AS ratecodeid,
@@ -108,7 +114,9 @@ SELECT
   congestion_surcharge,
   airport_fee,
   taxi_type,
+  extracted_at,
+  CURRENT_TIMESTAMP AS loaded_at,
 FROM ingestion.ingest_trips_python
 WHERE 1=1
-  AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
-  AND pickup_time IS NOT NULL
+  AND DATE_TRUNC('month', CAST(tpep_pickup_datetime AS TIMESTAMP)) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
+  AND tpep_pickup_datetime IS NOT NULL

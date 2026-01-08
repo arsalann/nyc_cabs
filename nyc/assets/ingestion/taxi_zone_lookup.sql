@@ -20,6 +20,9 @@ description: |
   - Data Quality Filter:
     - LocationID IS NOT NULL: Ensures we only load valid zones
     - LocationID is the primary key, so NULL values would break referential integrity
+  
+  - Materialization:
+    - No specified strategy, so it will be replaced every time the pipeline runs
 
 owner: data-engineering
 tags:
@@ -29,7 +32,6 @@ tags:
 
 materialization:
   type: table
-  strategy: truncate+insert
 
 columns:
   - name: location_id

@@ -79,6 +79,7 @@ def materialize():
     # Download and combine parquet files
     all_dataframes = []
     base_url = 'https://d37ci6vzurychx.cloudfront.net/trip-data'
+    extracted_at = datetime.now()
     for taxi_type in taxi_types:
       for year, month in months:
           print(f"Downloading {year}-{month:02d}: {taxi_type}")
@@ -90,6 +91,7 @@ def materialize():
 
               df = pd.read_parquet(io.BytesIO(response.content))
               df['taxi_type'] = taxi_type
+              df['extracted_at'] = extracted_at
 
               all_dataframes.append(df)
               print(f"Successfully downloaded {year}-{month:02d}: {len(df)} rows")
