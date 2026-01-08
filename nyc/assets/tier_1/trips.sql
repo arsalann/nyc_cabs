@@ -3,9 +3,15 @@ name: tier_1.trips
 uri: neptune.tier_1.trips
 type: duckdb.sql
 description: |
-  Stores raw ingested taxi trip data from the in-memory ingestion table.
-  Reads all columns from the in-memory trips_raw_in_memory table and inserts them into the tier_1.trips table.
+  Stores raw ingested taxi trip data from the Python ingestion table.
+  Reads all columns from ingestion.ingest_trips_python and normalizes column names to match tier_1 schema.
   This is the first persistent storage layer for raw trip data.
+  
+  Column normalization:
+  - vendor_id -> vendorid
+  - ratecode_id -> ratecodeid
+  - pu_location_id -> pulocationid
+  - do_location_id -> dolocationid
   Sample query:
   ```sql
   SELECT *
@@ -100,12 +106,14 @@ columns:
 
 WITH raw_trips AS (
       {# 
-        Read raw trip data from the Python ingestion table
+        Read raw trip data from the Python ingestion table and normalize column names
         
         Purpose:
         - This is the first persistent storage layer for raw trip data
         - Moves data from Python ingestion table to permanent tier_1 table
-        - Preserves all original columns from source parquet files
+        - Normalizes column names from parquet format (snake_case with underscores) to tier_1 schema (lowercase without underscores)
+        - Parquet files use: vendor_id, pu_location_id, do_location_id, ratecode_id
+        - Tier_1 expects: vendorid, pulocationid, dolocationid, ratecodeid
         
         Interval Modifiers:
         - start_datetime and end_datetime are provided by Bruin based on interval_modifiers config
@@ -117,19 +125,19 @@ WITH raw_trips AS (
         - This is critical because tpep_pickup_datetime is used as the incremental_key
         
         Why read from ingestion.ingest_trips_python:
-        - The Python ingestion asset downloads parquet files and materializes them into this table
-        - This tier_1 asset then persists it with incremental strategy for efficient updates
+        - The Python ingestion asset downloads parquet files and materializes them as-is (raw format)
+        - This tier_1 asset normalizes column names and persists with incremental strategy for efficient updates
       #}
   SELECT
-    vendorid,
+    vendor_id AS vendorid,
     tpep_pickup_datetime,
     tpep_dropoff_datetime,
     passenger_count,
     trip_distance,
-    ratecodeid,
+    ratecode_id AS ratecodeid,
     store_and_fwd_flag,
-    pulocationid,
-    dolocationid,
+    pu_location_id AS pulocationid,
+    do_location_id AS dolocationid,
     payment_type,
     fare_amount,
     extra,

@@ -72,16 +72,20 @@ default:
   - Use `requests` library to download parquet files from HTTP URLs
   - Loop through all months between `start_date` and `end_date`
   - Read parquet files into Pandas DataFrames using `pd.read_parquet()`
-  - Rename columns to match expected schema (parquet uses snake_case, need lowercase)
+  - **Column Normalization**: Parquet files use snake_case with underscores (e.g., `vendor_id`, `pu_location_id`), but tier_1 expects lowercase without underscores (e.g., `vendorid`, `pulocationid`). The asset includes a `normalize_column_names()` function to handle this mapping.
   - Add `taxi_type` column (default: `'yellow'`)
   - Combine all DataFrames using `pd.concat()` and return for Bruin materialization
-  - Handle date range to month conversion:
-    - Extract year/month from `start_date` and `end_date`
-    - Generate list of months between start and end (inclusive)
-    - Example: 2021-01-01 to 2022-02-28 → ingest 14 months (Jan 2021 to Feb 2022)
+  - Handle date range to month conversion using `generate_month_range()` function:
+    - Reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (already in YYYY-MM-DD format)
+    - Extracts first 10 characters to get YYYY-MM-DD format
+    - Generates list of months between start and end (inclusive)
+    - Example: 2021-12-01 to 2022-01-01 → ingest 2 months (Dec 2021 and Jan 2022)
 - **Dependencies**: `pandas`, `requests`, `python-dateutil`, `pyarrow`
 - **Function**: `materialize(start_date=None, end_date=None, **kwargs)` - returns Pandas DataFrame
-- **Note**: Currently, dates must be provided via `--start-date` and `--end-date` flags. Bruin may not automatically pass interval dates to Python assets.
+- **Date Handling**: 
+  - Bruin provides dates via `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables in YYYY-MM-DD format
+  - Falls back to function parameters or other environment variables if needed
+  - Raises error if dates are not provided
 
 #### `ingestion.ingest_trips_bulk` (Alternative SQL approach)
 - **Type**: `duckdb.sql`
@@ -123,11 +127,11 @@ default:
 - **Incremental Key**: `tpep_pickup_datetime`
 - **Time Granularity**: `timestamp`
 - **Interval Modifiers**: `start: -3d, end: 1d`
-- **Purpose**: Store raw ingested data from in-memory table to persistent storage
+- **Purpose**: Store raw ingested data from Python ingestion table to persistent storage
 - **Key Requirements**:
-  - Read from `ingestion.trips_raw_in_memory`
+  - Read from `ingestion.ingest_trips_python`
   - Filter by `start_datetime` and `end_datetime` (from interval modifiers)
-  - Preserve all original columns from source
+  - Preserve all original columns from source (columns already normalized by Python asset)
   - Handle schema evolution (e.g., `cbd_congestion_fee` column in newer data)
   - Filter out NULL `tpep_pickup_datetime` values
 
@@ -253,12 +257,13 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
 ## Known Issues & Workarounds
 
 ### Python Asset Date Handling
-- **Issue**: Bruin may not automatically pass `start_date` and `end_date` to Python assets' `materialize()` function
-- **Status**: Under investigation
-- **Workaround**: 
-  - Always use `--start-date` and `--end-date` flags when running the pipeline
-  - The Python asset will attempt to read dates from multiple sources (function params, kwargs, environment variables)
-  - If dates are not found, the asset will raise an error (better than silently using wrong dates)
+- **Status**: ✅ Resolved
+- **Implementation**: 
+  - The Python asset reads dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (provided by Bruin in YYYY-MM-DD format)
+  - Falls back to function parameters or other environment variables if needed
+  - Uses simple string slicing (`[:10]`) to extract YYYY-MM-DD format since dates are already in the correct format
+  - Includes a clean `generate_month_range()` function to convert date ranges to month lists
+  - Raises clear error if dates are not provided
 
 ### SQL Bulk Ingestion Parser Error
 - **Issue**: Using `--full-refresh` flag causes "Parser Error: syntax error at or near SELECT" in SQL bulk ingestion assets
@@ -268,17 +273,22 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
   - Or use single-month ingestion (`ingest_trips_single`) for incremental processing
   - Run without `--full-refresh` for normal operations
 
-### Schema Evolution
-- **Issue**: Parquet file schemas change over time (e.g., column name variations, new columns added)
+### Schema Evolution & Column Mapping
+- **Issue**: Parquet file column names use snake_case with underscores (e.g., `vendor_id`, `pu_location_id`), but tier_1 schema expects lowercase without underscores (e.g., `vendorid`, `pulocationid`)
 - **Solution**: 
-  - Python asset handles column renaming automatically
+  - Python asset includes `normalize_column_names()` function that maps:
+    - `vendor_id` → `vendorid`
+    - `ratecode_id` → `ratecodeid`
+    - `pu_location_id` → `pulocationid`
+    - `do_location_id` → `dolocationid`
+  - Only renames columns that exist in the DataFrame (handles missing columns gracefully)
   - SQL assets use conditional Jinja: `{% if 'cbd_congestion_fee' in get_columns_in_relation('table_name') %}`
 
 ## Implementation Checklist
 
 - [ ] Create `nyc/pipeline.yml` with correct configuration
 - [ ] Create `nyc/macros/ingestion.sql` (optional - can inline Jinja in asset)
-- [ ] Create `ingestion.trips_raw_in_memory.sql` with date-to-month conversion logic
+- [ ] Create `ingestion.ingest_trips_python.py` with date-to-month conversion logic and column normalization
 - [ ] Create `ingestion.taxi_zone_lookup.sql` with CSV ingestion
 - [ ] Create `tier_1.trips.sql` with time_interval strategy
 - [ ] Create `tier_2.trips_summary.sql` with deduplication and enrichment
@@ -293,9 +303,16 @@ bruin query --asset tier_3.report_trips_monthly --query "SELECT * FROM tier_3.re
 
 ## Key Implementation Details
 
-1. **Date Range to Months**: Parse `start_date` and `end_date` from Bruin, extract year/month, generate list of months (inclusive of end month)
-2. **Taxi Type**: Currently hardcoded to `'yellow'` in ingestion asset (can be modified or passed via Jinja context)
-3. **Deduplication**: Use `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` and filter `rn = 1`
-4. **Lookup Joins**: Use `LEFT JOIN` to retain all trips even if LocationID not found
-5. **Interval Modifiers**: Use `-3d` start and `1d` end to handle late-arriving data
-6. **Schema Handling**: Use conditional Jinja to handle columns that may not exist in all data files
+1. **Date Range to Months**: 
+   - Read dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (YYYY-MM-DD format)
+   - Use `generate_month_range()` function to convert date range to list of (year, month) tuples
+   - Handles cross-year ranges correctly (e.g., 2021-12-01 to 2022-01-01 → Dec 2021, Jan 2022)
+2. **Column Normalization**: 
+   - Parquet files use snake_case with underscores (`vendor_id`, `pu_location_id`)
+   - Tier_1 expects lowercase without underscores (`vendorid`, `pulocationid`)
+   - Python asset includes `normalize_column_names()` function to handle this mapping
+3. **Taxi Type**: Defaults to `'yellow'`, can be overridden via environment variable or kwargs
+4. **Deduplication**: Use `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` and filter `rn = 1`
+5. **Lookup Joins**: Use `LEFT JOIN` to retain all trips even if LocationID not found
+6. **Interval Modifiers**: Use `-3d` start and `1d` end to handle late-arriving data
+7. **Schema Handling**: Use conditional Jinja to handle columns that may not exist in all data files
