@@ -37,89 +37,74 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import io
 import os
+import json
 
 
-def generate_month_range(start_date_str: str, end_date_str: str) -> list[tuple[int, int]]:
+def generate_month_range() -> list[tuple[int, int]]:
     """
     Generate list of (year, month) tuples for all months between start and end dates (inclusive).
-
-    Args:
-        start_date_str: Start date in YYYY-MM-DD format
-        end_date_str: End date in YYYY-MM-DD format
 
     Returns:
         List of (year, month) tuples
     """
-    start_date = datetime.strptime(start_date_str[:10], '%Y-%m-%d')
-    end_date = datetime.strptime(end_date_str[:10], '%Y-%m-%d')
+    start_month = datetime.strptime(os.environ.get('BRUIN_START_DATE'), '%Y-%m-%d').replace(day=1)
+    end_month = datetime.strptime(os.environ.get('BRUIN_END_DATE'), '%Y-%m-%d').replace(day=1)
 
+    print(f"Generating months between {start_month} and {end_month}")
     months = []
-    current = start_date.replace(day=1)
-    end_month = end_date.replace(day=1)
-
+    current = start_month
     while current <= end_month:
         months.append((current.year, current.month))
         current += relativedelta(months=1)
 
+    print(f"Total months to ingest: {len(months)}")
+
     return months
 
 
-def materialize(start_date=None, end_date=None, **kwargs):
+def materialize():
     """
     Materialize function that returns a Pandas DataFrame.
     Bruin will automatically insert this DataFrame into DuckDB based on materialization strategy.
     """
-    # Get dates from Bruin environment variables (BRUIN_START_DATE and BRUIN_END_DATE are YYYY-MM-DD format)
-    start_date_str = (
-        start_date 
-        or os.environ.get('BRUIN_START_DATE') 
-        or os.environ.get('START_DATE') 
-        or kwargs.get('start_date')
-    )
-    end_date_str = (
-        end_date 
-        or os.environ.get('BRUIN_END_DATE') 
-        or os.environ.get('END_DATE') 
-        or kwargs.get('end_date')
-    )
-    
-    if not start_date_str or not end_date_str:
-        raise ValueError("start_date and end_date must be provided via BRUIN_START_DATE/BRUIN_END_DATE or function parameters")
-    
-    # Get taxi_type (default to 'yellow')
-    taxi_type = os.environ.get('taxi_type') or kwargs.get('taxi_type', 'yellow')
-    
+
+    # Get taxi_type
+    bruin_vars = json.loads(os.environ["BRUIN_VARS"])
+    taxi_types = bruin_vars.get('taxi_types')
+    print(f"Taxi types: {taxi_types}")
+
     # Generate list of months to process
-    months = generate_month_range(start_date_str, end_date_str)
-    
+    months = generate_month_range()
+
     # Download and combine parquet files
     all_dataframes = []
     base_url = 'https://d37ci6vzurychx.cloudfront.net/trip-data'
-    
-    for year, month in months:
-        url = f'{base_url}/{taxi_type}_tripdata_{year}-{month:02d}.parquet'
-        
-        try:
-            response = requests.get(url, timeout=300)
-            response.raise_for_status()
-            
-            df = pd.read_parquet(io.BytesIO(response.content))
-            df['taxi_type'] = taxi_type
-            
-            all_dataframes.append(df)
-            print(f"Successfully downloaded {year}-{month:02d}: {len(df)} rows")
-            
-        except requests.exceptions.RequestException as e:
-            print(f"Error downloading {year}-{month:02d}: {e}")
-            continue
-        except Exception as e:
-            print(f"Error processing {year}-{month:02d}: {e}")
-            continue
-    
+    for taxi_type in taxi_types:
+      for year, month in months:
+          print(f"Downloading {year}-{month:02d}: {taxi_type}")
+          url = f'{base_url}/{taxi_type}_tripdata_{year}-{month:02d}.parquet'
+
+          try:
+              response = requests.get(url, timeout=300)
+              response.raise_for_status()
+
+              df = pd.read_parquet(io.BytesIO(response.content))
+              df['taxi_type'] = taxi_type
+
+              all_dataframes.append(df)
+              print(f"Successfully downloaded {year}-{month:02d}: {len(df)} rows")
+
+          except requests.exceptions.RequestException as e:
+              print(f"Error downloading {year}-{month:02d}: {e}")
+              continue
+          except Exception as e:
+              print(f"Error processing {year}-{month:02d}: {e}")
+              continue
+
     if not all_dataframes:
-        return pd.DataFrame(columns=['taxi_type'])
-    
-    combined_df = pd.concat(all_dataframes, ignore_index=True)
-    print(f"Total rows combined: {len(combined_df)}")
-    
-    return combined_df
+        combined_df = pd.concat(all_dataframes, ignore_index=True)
+        print(f"Total rows combined: {len(combined_df)}")
+        return combined_df
+    else:
+        print("No dataframes to combine")
+        raise ValueError("No dataframes to combine")

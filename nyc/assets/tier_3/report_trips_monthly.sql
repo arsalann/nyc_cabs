@@ -32,10 +32,6 @@ materialization:
   incremental_key: month_date
   time_granularity: timestamp
 
-interval_modifiers:
-  start: -3M
-  end: 1M
-
 columns:
   - name: taxi_type
     type: VARCHAR
@@ -87,10 +83,10 @@ WITH trips_by_month AS (
     - tip_amount IS NOT NULL: Required for average/total tip calculations
     - Filtering out NULLs ensures accurate aggregations (NULL values would skew averages)
     
-    Interval Modifiers:
-    - interval_modifiers: start: -3M, end: 1M means process last 3 months
-    - Longer lookback than tier_1/tier_2 because monthly reports need more historical data
-    - This ensures monthly aggregates are complete and up-to-date
+    Date Range Filtering:
+    - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
+    - Truncate to month level to match tier_1/tier_2 logic (ingestion loads full months)
+    - The time_interval materialization strategy already handles deleting data in the interval range
   #}
   SELECT
     taxi_type,
@@ -101,24 +97,12 @@ WITH trips_by_month AS (
   FROM tier_2.trips_summary
   WHERE 1=1
     {# 
-      Filter by date range
-      - For incremental runs: use start_datetime/end_datetime (from interval modifiers)
-      - For full-refresh: use start_date/end_date (from command line)
-      - When using start_date/end_date, filter by month boundaries to match tier_1/tier_2 logic
+      Filter by date range using month-level truncation
+      - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
+      - Truncate interval dates to month level to match tier_1/tier_2 logic
+      - Use BETWEEN to include all trips in the month range
     #}
-    {% if start_datetime is defined and end_datetime is defined %}
-      {# Incremental run: use exact datetime range from interval modifiers #}
-      AND tpep_pickup_datetime >= '{{ start_datetime }}'
-      AND tpep_pickup_datetime < '{{ end_datetime }}'
-    {% elif start_date is defined and end_date is defined %}
-      {# Full-refresh: include all data from months that overlap with the date range #}
-      {% set start_date_str = start_date | string %}
-      {% set end_date_str = end_date | string %}
-      {% set start_year_month = start_date_str[0:7] %}
-      {% set end_year_month = end_date_str[0:7] %}
-      AND DATE_TRUNC('month', tpep_pickup_datetime) >= DATE('{{ start_year_month }}-01')
-      AND DATE_TRUNC('month', tpep_pickup_datetime) <= DATE('{{ end_year_month }}-01')
-    {% endif %}
+    AND DATE_TRUNC('month', tpep_pickup_datetime) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
     {# Data quality: ensure all metrics are present for accurate aggregations #}
     AND trip_duration_seconds IS NOT NULL
     AND total_amount IS NOT NULL

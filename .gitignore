@@ -4,3 +4,5 @@ logs/*.log
 logs/queries
 *.db
 duckdb.db
+*.DS_Store
+*.pyc

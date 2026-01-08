@@ -36,10 +36,6 @@ materialization:
   incremental_key: tpep_pickup_datetime
   time_granularity: timestamp
 
-interval_modifiers:
-  start: -3d
-  end: 1d
-
 columns:
   - name: vendorid
     type: INTEGER
@@ -104,118 +100,16 @@ columns:
 
 @bruin */
 
-WITH raw_trips AS (
-      {# 
-        Read raw trip data from the Python ingestion table and normalize column names
-        
-        Purpose:
-        - This is the first persistent storage layer for raw trip data
-        - Moves data from Python ingestion table to permanent tier_1 table
-        - Normalizes column names from parquet format (snake_case with underscores) to tier_1 schema (lowercase without underscores)
-        - Parquet files use: vendor_id, pu_location_id, do_location_id, ratecode_id
-        - Tier_1 expects: vendorid, pulocationid, dolocationid, ratecodeid
-        
-        Interval Modifiers:
-        - start_datetime and end_datetime are provided by Bruin based on interval_modifiers config
-        - interval_modifiers: start: -3d, end: 1d means process last 3 days (allows for late-arriving data)
-        - Filtering by tpep_pickup_datetime ensures we only process trips in the specified time window
-        
-        Data Quality:
-        - tpep_pickup_datetime IS NOT NULL: Ensures we only store trips with valid pickup times
-        - This is critical because tpep_pickup_datetime is used as the incremental_key
-        
-        Why read from ingestion.ingest_trips_python:
-        - The Python ingestion asset downloads parquet files and materializes them as-is (raw format)
-        - This tier_1 asset normalizes column names and persists with incremental strategy for efficient updates
-      #}
-  SELECT
-    vendor_id AS vendorid,
-    tpep_pickup_datetime,
-    tpep_dropoff_datetime,
-    passenger_count,
-    trip_distance,
-    ratecode_id AS ratecodeid,
-    store_and_fwd_flag,
-    pu_location_id AS pulocationid,
-    do_location_id AS dolocationid,
-    payment_type,
-    fare_amount,
-    extra,
-    mta_tax,
-    tip_amount,
-    tolls_amount,
-    improvement_surcharge,
-    total_amount,
-    congestion_surcharge,
-    airport_fee,
-    taxi_type,
-      FROM ingestion.ingest_trips_python
-  WHERE 1=1
-    {# 
-      Filter by date range
-      - For incremental runs: use start_datetime/end_datetime (from interval modifiers)
-      - For full-refresh: use start_date/end_date (from command line)
-      - When using start_date/end_date, we need to include all data from those months
-        since ingestion loads full months, we should filter by month boundaries
-    #}
-    {% if start_datetime is defined and end_datetime is defined %}
-      {# Incremental run: use exact datetime range from interval modifiers #}
-      AND tpep_pickup_datetime >= '{{ start_datetime }}'
-      AND tpep_pickup_datetime < '{{ end_datetime }}'
-    {% elif start_date is defined and end_date is defined %}
-      {# Full-refresh: include all data from months that overlap with the date range #}
-      {# Extract year-month from start_date and end_date to match ingestion logic #}
-      {% set start_date_str = start_date | string %}
-      {% set end_date_str = end_date | string %}
-      {% set start_year_month = start_date_str[0:7] %}
-      {% set end_year_month = end_date_str[0:7] %}
-      AND DATE_TRUNC('month', tpep_pickup_datetime) >= DATE('{{ start_year_month }}-01')
-      AND DATE_TRUNC('month', tpep_pickup_datetime) <= DATE('{{ end_year_month }}-01')
-    {% endif %}
-    {# Data quality: ensure pickup datetime exists (required for incremental processing) #}
-    AND tpep_pickup_datetime IS NOT NULL
-)
-
-, final AS (
-  {# 
-    Final select with all columns
-    - Simple passthrough to maintain all original data
-    - No transformations at this tier - we preserve raw data as-is
-  #}
-  SELECT
-    vendorid,
-    tpep_pickup_datetime,
-    tpep_dropoff_datetime,
-    passenger_count,
-    trip_distance,
-    ratecodeid,
-    store_and_fwd_flag,
-    pulocationid,
-    dolocationid,
-    payment_type,
-    fare_amount,
-    extra,
-    mta_tax,
-    tip_amount,
-    tolls_amount,
-    improvement_surcharge,
-    total_amount,
-    congestion_surcharge,
-    airport_fee,
-    taxi_type,
-  FROM raw_trips
-)
-
 SELECT
-  vendorid,
+  vendor_id AS vendorid,
   tpep_pickup_datetime,
   tpep_dropoff_datetime,
   passenger_count,
   trip_distance,
-  ratecodeid,
+  ratecode_id AS ratecodeid,
   store_and_fwd_flag,
-  pulocationid,
-  dolocationid,
+  pu_location_id AS pulocationid,
+  do_location_id AS dolocationid,
   payment_type,
   fare_amount,
   extra,
@@ -227,5 +121,16 @@ SELECT
   congestion_surcharge,
   airport_fee,
   taxi_type,
-FROM final;
+FROM ingestion.ingest_trips_python
+WHERE 1=1
+  {# 
+    Filter by date range using month-level truncation
+    - start_datetime and end_datetime are always provided by Bruin for time_interval strategy
+    - Truncate interval dates to month level to match ingestion logic (ingestion loads full months)
+    - Use BETWEEN to include all trips in the month range
+    - The time_interval materialization strategy already handles deleting data in the interval range
+  #}
+  AND DATE_TRUNC('month', tpep_pickup_datetime) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+  {# Data quality: ensure pickup datetime exists (required for incremental processing) #}
+  AND tpep_pickup_datetime IS NOT NULL;
 
