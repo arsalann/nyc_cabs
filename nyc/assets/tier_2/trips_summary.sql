@@ -123,7 +123,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     extracted_at,
   FROM tier_1.trips_historic
   WHERE 1=1
-    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
     AND pickup_time IS NOT NULL
     AND dropoff_time IS NOT NULL
     AND pulocationid IS NOT NULL
@@ -163,11 +163,11 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
 , trips_with_lookup AS ( -- Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table
   SELECT
     ct.*,
-    pickup_lookup.Borough AS pickup_borough,
-    pickup_lookup.Zone AS pickup_zone,
+    pickup_lookup.borough AS pickup_borough,
+    pickup_lookup.zone AS pickup_zone,
   FROM cleaned_trips AS ct
   LEFT JOIN ingestion.taxi_zone_lookup AS pickup_lookup
-    ON ct.pulocationid = pickup_lookup.LocationID
+    ON ct.pulocationid = pickup_lookup.location_id
 )
 
 , final AS ( -- Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table
@@ -184,14 +184,14 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     twl.total_amount,
     twl.pickup_borough,
     twl.pickup_zone,
-    dropoff_lookup.Borough AS dropoff_borough,
-    dropoff_lookup.Zone AS dropoff_zone,
+    dropoff_lookup.borough AS dropoff_borough,
+    dropoff_lookup.zone AS dropoff_zone,
     twl.trip_duration_seconds,
     twl.extracted_at,
     CURRENT_TIMESTAMP AS updated_at,
   FROM trips_with_lookup AS twl
   LEFT JOIN ingestion.taxi_zone_lookup AS dropoff_lookup
-    ON twl.dolocationid = dropoff_lookup.LocationID
+    ON twl.dolocationid = dropoff_lookup.location_id
 )
 
 SELECT

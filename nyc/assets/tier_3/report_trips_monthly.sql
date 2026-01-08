@@ -93,7 +93,7 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     extracted_at,
   FROM tier_2.trips_summary
   WHERE 1=1
-    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', '{{ start_datetime }}') AND DATE_TRUNC('month', '{{ end_datetime }}')
+    AND DATE_TRUNC('month', pickup_time) BETWEEN DATE_TRUNC('month', CAST('{{ start_datetime }}' AS TIMESTAMP)) AND DATE_TRUNC('month', CAST('{{ end_datetime }}' AS TIMESTAMP))
     AND trip_duration_seconds IS NOT NULL
     AND total_amount IS NOT NULL
     AND tip_amount IS NOT NULL
