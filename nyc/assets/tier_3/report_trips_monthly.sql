@@ -112,7 +112,6 @@ trips_by_month AS ( -- Step 1: Extract month from pickup_time and prepare data f
     AND total_amount IS NOT NULL
     AND tip_amount IS NOT NULL
     AND dropoff_time > pickup_time
-    AND payment_description IN ('flex_fare', 'credit_card', 'cash')  -- Only include trips that were actually charged
 )
 
 , monthly_aggregates AS ( -- Step 2: Aggregate metrics by taxi type and month

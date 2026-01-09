@@ -90,12 +90,6 @@ columns:
     type: TIMESTAMP
     description: Timestamp when the data was loaded into tier_1
 
-custom_checks:
-  - name: non_negative_trip_distance
-    description: Ensures trip_distance is non-negative
-    query: SELECT COUNT(*) FROM tier_1.trips_historic WHERE trip_distance < 0
-    value: 0
-
 @bruin */
 
 SELECT

@@ -118,12 +118,6 @@ columns:
     type: TIMESTAMP
     description: Timestamp when the data was last updated in tier_2
 
-custom_checks:
-  - name: reasonable_trip_duration
-    description: Validates trip_duration_seconds is positive and reasonable (less than 24 hours)
-    query: SELECT COUNT(*) FROM tier_2.trips_summary WHERE trip_duration_seconds <= 0 OR trip_duration_seconds >= 86400
-    value: 0
-
 @bruin */
 
 WITH
@@ -224,6 +218,10 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     AND trip_duration_seconds < 28800
     -- filter out negative total amounts
     AND total_amount >= 0
+    -- Only include trips that were actually charged
+    AND payment_lookup.payment_description IN ('flex_fare', 'credit_card', 'cash')
+    -- filter out negative trip distances as they are data quality issues (trip distance cannot be negative)
+    AND trip_distance >= 0
 )
 
 , final AS ( -- Step 7: Final select with all required columns

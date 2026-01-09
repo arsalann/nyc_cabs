@@ -5,3 +5,6 @@ logs/queries
 *.db
 *.DS_Store
 *.pyc
+
+__pycache__/
+*.py[cod]
