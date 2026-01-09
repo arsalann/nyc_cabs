@@ -1,8 +1,17 @@
-"""Ingest NYC taxi trip data from HTTP parquet files.
-
-This asset downloads parquet files from the NYC TLC Trip Record Data
-and returns a Pandas DataFrame that Bruin will automatically materialize.
-"""
+"""@bruin
+name: tier_1.ingest_trips
+type: python
+description: Ingest raw trip data from HTTP parquet files using Python. Downloads NYC taxi trip data from NYC TLC Trip Record Data, adds taxi_type and extracted_at columns, and preserves original column names from parquet files.
+owner: nyc-taxi-team
+tags:
+  - tier_1
+  - ingestion
+  - python
+materialization:
+  type: table
+  strategy: create+replace
+connection: duckdb-default
+@bruin"""
 
 import os
 import json

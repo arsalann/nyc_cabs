@@ -112,8 +112,8 @@ SELECT
         CAST(tpep_dropoff_datetime AS TIMESTAMP),
         CAST(lpep_dropoff_datetime AS TIMESTAMP)
     ) AS dropoff_time,
-    COALESCE(pu_location_id, PULocationID) AS pickup_location_id,
-    COALESCE(do_location_id, DOLocationID) AS dropoff_location_id,
+    pu_location_id AS pickup_location_id,
+    do_location_id AS dropoff_location_id,
     passenger_count,
     trip_distance,
     fare_amount,
