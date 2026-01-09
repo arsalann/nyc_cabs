@@ -121,7 +121,7 @@ SELECT
     total_amount,
     payment_type,
     vendor_id,
-    rate_code_id,
+    ratecode_id AS rate_code_id,
     store_and_fwd_flag,
     extra,
     mta_tax,
