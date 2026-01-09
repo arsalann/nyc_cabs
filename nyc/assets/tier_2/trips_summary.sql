@@ -13,7 +13,7 @@ description: |
   - Step 3: Filters to keep only deduplicated records (rn=1) and calculates trip duration in seconds using EXTRACT(EPOCH FROM (dropoff_time - pickup_time)). Trip duration is a derived metric calculated once here to avoid recalculating in downstream queries.
   - Step 4: Enriches trips with pickup location information using LEFT JOIN with taxi_zone_lookup table. LEFT JOIN ensures all trips are preserved even if location ID doesn't exist in lookup table, preserving data integrity.
   - Step 5: Enriches trips with dropoff location information using LEFT JOIN with taxi_zone_lookup table. Adds Borough and Zone names for both pickup and dropoff locations to make data more accessible for analysis and reporting.
-  - Step 6: Enriches trips with payment type information using LEFT JOIN with payment_type_lookup table. Adds payment_description to make payment information human-readable for analysis and reporting.
+  - Step 6: Enriches trips with payment type information using LEFT JOIN with payment_lookup table. Adds payment_description to make payment information human-readable for analysis and reporting.
   
   Aggregation Level: Individual trip records with location enrichment and deduplication applied.
   
@@ -35,7 +35,7 @@ tags:
 depends:
   - ingestion.taxi_zone_lookup
   - tier_1.trips_historic
-  - tier_1.payment_type_lookup
+  - tier_1.payment_lookup
 
 materialization:
   type: table
@@ -186,7 +186,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
     ON ct.pickup_location_id = pickup_lookup.location_id
 )
 
-, trips_with_payment AS ( -- Step 6: Enriches trips with payment type information using LEFT JOIN with payment_type_lookup table
+, trips_with_payment AS ( -- Step 6: Enriches trips with payment type information using LEFT JOIN with payment_lookup table
   SELECT
     twl.pickup_time,
     twl.dropoff_time,
@@ -209,7 +209,7 @@ raw_trips AS ( -- Step 1: Select necessary columns from tier_1 and apply data qu
   FROM trips_with_lookup AS twl
   LEFT JOIN ingestion.taxi_zone_lookup AS dropoff_lookup
     ON twl.dropoff_location_id = dropoff_lookup.location_id
-  LEFT JOIN tier_1.payment_type_lookup AS payment_lookup
+  LEFT JOIN tier_1.payment_lookup AS payment_lookup
     ON CAST(twl.payment_type AS INTEGER) = payment_lookup.payment_type_id
   WHERE 1=1
     -- filter out zero durations (trip cannot end at the same time it starts or before it starts)
