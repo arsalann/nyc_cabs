@@ -32,12 +32,19 @@ st.markdown(
 
 
 def load_token() -> Optional[str]:
-    # Prefer explicit env var, then Bruin-injected env, then local .bruin.yml
+    # 1. Streamlit secrets (standard for Streamlit Cloud deployment)
+    try:
+        if "MOTHERDUCK_TOKEN" in st.secrets:
+            return st.secrets["MOTHERDUCK_TOKEN"].strip().strip('"')
+    except Exception:
+        pass
+
+    # 2. Environment variables
     env_token = os.getenv("MOTHERDUCK_TOKEN") or os.getenv("BRUIN_CONNECTION_MOTHERDUCK_PROD_TOKEN")
     if env_token:
         return env_token.strip().strip('"')
 
-    # Fallback: parse .bruin.yml so the app works locally without manual export
+    # 3. Fallback: parse .bruin.yml for local development
     try:
         root = Path(__file__).resolve().parents[2]
         config_path = root / ".bruin.yml"
@@ -60,8 +67,8 @@ def load_token() -> Optional[str]:
 token = load_token()
 if not token:
     st.error(
-        "MotherDuck token missing. Set MOTHERDUCK_TOKEN or ensure .bruin.yml is present. "
-        "Connection name expected: motherduck-prod."
+        "MotherDuck token missing. Add MOTHERDUCK_TOKEN to .streamlit/secrets.toml "
+        "or set it as an environment variable."
     )
     st.stop()
 

@@ -1,4 +1,5 @@
 .bruin.yml
+.streamlit/secrets.toml
 logs/runs
 logs/*.log
 logs/queries
