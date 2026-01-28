@@ -2,6 +2,8 @@
 
 A comprehensive ELT pipeline built with Bruin that demonstrates best practices for building data pipelines. This project processes NYC taxi trip data from public HTTP sources, transforms it through multiple tiers, and generates analytical reports.
 
+The pipeline extracts NYC taxi trip data from HTTP parquet files, cleans and transforms it, and generates monthly summary reports. It uses DuckDB for local processing and follows a three-tier architecture: raw (ingestion & raw) → staging (cleaned) → reports (aggregated).
+
 ## What This Project Aims to Achieve
 
 This project serves as a **template and learning resource** for developers who want to understand Bruin's capabilities and how to build production-ready data pipelines. It demonstrates:
@@ -9,7 +11,7 @@ This project serves as a **template and learning resource** for developers who w
 - **End-to-end ELT workflows**: From raw data ingestion to analytical reporting
 - **Multi-tier data architecture**: Implementing a layered approach (ingestion → raw → cleaned → aggregated)
 - **Incremental data processing**: Using time-based incremental strategies for efficient data updates
-- **Data quality and transformation**: Deduplication, enrichment, and data quality checks
+- **Data quality and transformation**: Cleaning, enrichment, and data quality checks
 - **Python and SQL integration**: Combining Python-based ingestion with SQL transformations
 
 ## What Tools and Features of Bruin This Project Showcases
@@ -21,55 +23,41 @@ This project serves as a **template and learning resource** for developers who w
    - Shows integration with external APIs and HTTP data sources
    - Returns Pandas DataFrames that Bruin automatically materializes into tables
 
-2. **Time-Interval Incremental Strategy**
+2. **Append + Deduplication Strategy**
+   - Raw layer uses `append` materialization for simple, fast ingestion
+   - Staging layer deduplicates using `QUALIFY ROW_NUMBER()` to handle re-ingested data
+   - Keeps the most recently extracted record when duplicates exist
+   
+3. **Time-Interval Incremental Strategy**
    - Efficient incremental processing using `time_interval` materialization
    - Automatic date range handling and data deletion/replacement
    - Month-level truncation for batch processing
 
-3. **Pipeline Variables**
+4. **Pipeline Variables**
    - Using pipeline-level variables (e.g., `taxi_types`) for configuration
    - Accessing variables in Python assets via `BRUIN_VARS` environment variable
    - Using variables in SQL assets via Jinja templating
 
-4. **Data Lineage and Dependencies**
+5. **Data Lineage and Dependencies**
    - Explicit dependency declarations between assets
    - Automatic dependency resolution and execution ordering
    - Cross-tier data flow
 
-5. **Metadata Management**
+6. **Metadata Management**
    - Comprehensive column descriptions and documentation
    - Primary key definitions and nullable constraints
-   - Asset-level tags and ownership
 
-6. **Data Quality Checks**
+7. **Data Quality Checks**
    - Custom quality checks using SQL queries to validate business rules and data integrity
    - Column-level checks using built-in check types (non_negative, positive, min, max)
 
-### Data Processing Patterns
-
-- **Column Normalization**: Transforming source column names to more readable formats in tier_1
-- **Deduplication**: Using window functions to handle duplicate records
-- **Data Enrichment**: Joining with lookup tables to convert location IDs to human-readable borough and zone names, and payment type codes to descriptions, adding dimensional information to trip records
-- **Aggregation**: Monthly summaries with multiple metrics (averages and totals)
-- **Error Handling**: Graceful handling of missing data and failed downloads
-
-
-## Target Audience
-
-This project is designed for:
-- **Developers** learning Bruin for the first time
-- **Data Engineers** looking for a reference implementation
-- **Teams** evaluating Bruin's capabilities
-- **Anyone** wanting to understand modern ELT pipeline patterns
-
 ## Learning Path
 
-1. Start with `ingest_trips.py` to understand Python asset materialization
+1. Start with `trips_raw.py` to understand Python asset materialization with append strategy
 2. Review `taxi_zone_lookup.sql` and `payment_lookup.asset.yml` to see different lookup table patterns
-3. Review `trips_historic.sql` to see column normalization and time-interval strategy
-4. Study `trips_summary.sql` for deduplication and enrichment patterns
-5. Examine `report_trips_monthly.sql` for aggregation techniques
-6. Explore `pipeline.yml` to understand configuration and variables
+3. Review `trips_summary.sql` for column normalization, enrichment, and deduplication patterns
+4. Examine `report_trips_monthly.sql` for aggregation techniques
+5. Explore `pipeline.yml` to understand configuration and variables
 
 ## Data Source
 
@@ -82,11 +70,8 @@ This project uses publicly available NYC taxi trip data from the [NYC TLC Trip R
 
 # Implementation Instructions
 
-This document provides complete instructions to create and test a Bruin pipeline for NYC taxi trip data processing.
-
-## Pipeline Overview
-
-The pipeline extracts NYC taxi trip data from HTTP parquet files, cleans and transforms it, and generates monthly summary reports. It uses DuckDB for local processing and follows a three-tier architecture: ingestion → tier_1 (raw) → tier_2 (cleaned) → tier_3 (reports).
+These instructions are especially useful as a prompt to an AI agent - this would work best when the Bruin MCP is configured. Please follow the instructions in the link below to set up Bruin MCP:
+https://getbruin.com/docs/bruin/getting-started/bruin-mcp.html
 
 ## Data Sources
 
@@ -109,29 +94,28 @@ The pipeline extracts NYC taxi trip data from HTTP parquet files, cleans and tra
 ### Directory Layout
 ```
 nyc-taxi/
+├── .bruin.yml
 ├── pipeline.yml
 ├── requirements.txt
-├── .bruin.yml
 └── assets/
-    ├── tier_1/
-    │   ├── ingest_trips.py
-    │   ├── taxi_zone_lookup.sql
+    ├── raw/
+    │   ├── trips_raw.py
     │   ├── payment_lookup.asset.yml
     │   ├── payment_lookup.csv
-    │   └── trips_historic.sql
-    ├── tier_2/
+    │   └── taxi_zone_lookup.sql
+    ├── staging/
     │   └── trips_summary.sql
-    └── tier_3/
+    └── reports/
         └── report_trips_monthly.sql
 ```
 
-## Local Configuration (`.bruin.yml`)
+## Connection Configurations (`.bruin.yml`)
 
-Before running the pipeline, you need to create a `.bruin.yml` file in the project root directory to configure your local DuckDB connection.
+Before running the pipeline, you need to create a `.bruin.yml` file in the project root directory to [configure your local DuckDB connection](https://getbruin.com/docs/bruin/platforms/duckdb.html). This file is where you configure any database connection, as well as [custom secrets](https://getbruin.com/docs/bruin/secrets/bruinyml.html#bruin-yml-schema).
 
-### Setup Instructions
+The `.bruin.yml` file configures your local development environment and tells Bruin where to create and store the DuckDB database file. If the duckdb database file does not already exist, it will automatically be created when you first run the pipeline.
 
-1. **Create `.bruin.yml` file** in the project root:
+**Create `.bruin.yml` file** in the project root:
    ```yaml
    default_environment: default
    environments:
@@ -142,17 +126,11 @@ Before running the pipeline, you need to create a `.bruin.yml` file in the proje
                      path: duckdb.db
    ```
 
-2. **Add to `.gitignore`**: It's best practice to add `.bruin.yml` to your `.gitignore` file because:
+Note that it is best practice to add `.bruin.yml` to your `.gitignore` file because:
    - It may contain sensitive connection information and authentication credentials
    - Different developers may have different local database paths
    - Environment-specific configurations should not be committed to version control
 
-   Add this line to your `.gitignore`:
-   ```
-   .bruin.yml
-   ```
-
-The `.bruin.yml` file configures your local development environment and tells Bruin where to create and store the DuckDB database file.
 
 ## Pipeline Configuration (`pipeline.yml`)
 
@@ -191,11 +169,22 @@ In this pipeline, the `taxi_types` variable allows you to configure which taxi t
 
 ## Asset Specifications
 
-### 1. Tier 1: Ingestion & Raw Data Storage
+### Asset Naming
 
-#### `tier_1.ingest_trips`
+The `name` parameter in Bruin asset configurations (e.g., `name: raw.trips_raw`) is **optional**. If not provided, Bruin automatically infers the asset name from the file path:
+- The parent folder name becomes the schema/dataset name (e.g., `raw`)
+- The file name (without extension) becomes the asset name (e.g., `trips_raw.py` → `trips_raw`)
+- Combined, this creates the full asset name: `raw.trips_raw`
+
+**Example**: A file at `assets/raw/trips_raw.py` will automatically be named `raw.trips_raw` even without an explicit `name` parameter in the asset configuration.
+
+You can still explicitly specify the `name` parameter if you want to override this default behavior or if your file structure doesn't match your desired naming convention.
+
+### 1. Raw: Ingestion & Raw Data Storage
+
+#### `raw.trips_raw`
 - **Type**: `python`
-- **Strategy**: `create+replace`
+- **Strategy**: `append`
 - **Connection**: `duckdb-default`
 - **Purpose**: Ingest raw trip data from HTTP parquet files using Python
 
@@ -209,36 +198,40 @@ Bruin's Python materialization allows you to write Python code that returns a Pa
 The `materialize()` function is required and must return a Pandas DataFrame. Bruin calls this function, receives the DataFrame, and handles all the database operations to store it as a table based on the materialization strategy.
 
 **Bruin Configuration**:
-- Preserves original column names from parquet files (column normalization happens in tier_1)
+- Preserves original column names from parquet files as-is (e.g., `tpep_pickup_datetime` for yellow taxis, `lpep_pickup_datetime` for green taxis, `pulocationid`, etc.)
+- Column normalization (COALESCE for datetime columns, renaming) happens in staging, not in raw
 - Adds `taxi_type` column from pipeline variables
 - Adds `extracted_at` timestamp column
-- Uses `create+replace` strategy to fully refresh the table on each run
+- Uses `append` strategy—deduplication is handled downstream in `staging.trips_summary`
 - Python dependencies are defined in `requirements.txt` at the pipeline root
 
-#### `tier_1.taxi_zone_lookup`
+**Design Choice - Why Python with append?**:
+- **Python for Complex Ingestion**: Python is ideal for this use case because it allows us to dynamically loop through date ranges and taxi types using Bruin variables (`BRUIN_START_DATE`, `BRUIN_END_DATE`, and `BRUIN_VARS`). This enables flexible ingestion logic that can handle multiple sources and date ranges without hardcoding values.
+- **append Strategy**: The append strategy simply adds new records to the table. If the same date range is re-ingested (e.g., running the pipeline twice for January 2025), duplicates will be created in the raw layer. These duplicates are handled in the staging layer via `QUALIFY ROW_NUMBER()` deduplication.
+- **Bruin Python Materialization**: Utilizing Bruin's Python materialization feature eliminates the need for manual database operations. We simply return a Pandas DataFrame, and Bruin handles all the database connection management, schema inference, and table creation/insertion automatically. This keeps the code focused on data extraction and transformation logic.
+
+#### `raw.taxi_zone_lookup`
 - **Type**: `duckdb.sql`
-- **Strategy**: `truncate+insert` (implicit - no strategy specified, table is replaced on each run)
+- **Strategy**: `create+replace` (implicit - no strategy specified, table is replaced on each run)
 - **Purpose**: Load taxi zone lookup table from HTTP CSV source
 
 **Bruin Configuration**:
 - Primary key: `location_id` (non-nullable)
-- Reads from HTTP CSV: `https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv`
-- Uses DuckDB's `read_csv()` function with `header=true` and `auto_detect=true`
+- Uses DuckDB's `read_csv()` function with `header=true` and `auto_detect=true` and pass the HTTP URL that contains the csv file
 - Filters out NULL location IDs to ensure data quality
 - Strategy: Table is replaced on each run to ensure we have the latest zone information
 
-**Design Choice - Why HTTP CSV?**:
-- The lookup table may be updated by NYC TLC (new zones, renamed zones, etc.)
-- Refreshing ensures we always have the latest zone information
-- HTTP source is reliable and publicly available
+**Design Choice**:
+- DuckDB has built-in ingestion features; when a URL is provided with the `read_csv` function, it essentially downloads the csv file and creates a table
+- The lookup table may be updated by NYC TLC (new zones, renamed zones, etc.) - create/replace ensures we always have the latest zone information
 
-#### `tier_1.payment_lookup`
+#### `raw.payment_lookup`
 - **Type**: `duckdb.seed`
 - **Purpose**: Load payment type lookup table from local CSV seed file
 
 **Bruin Configuration**:
 - Primary key: `payment_type_id` (non-nullable)
-- Reads from local CSV file: `./payment_lookup.csv`
+- Reads from local CSV file: `payment_lookup.csv`
 - Maps payment type codes (0-6) to human-readable descriptions
 
 **Design Choice - Why DuckDB Seed Asset?**:
@@ -252,12 +245,15 @@ The `materialize()` function is required and must return a Pandas DataFrame. Bru
 - Use **seed assets** for static reference data that rarely changes and should be version-controlled
 - Use **SQL assets** (like `taxi_zone_lookup`) for data that may change frequently or comes from external sources
 
-#### `tier_1.trips_historic`
+### 2. Staging: Cleaned & Enriched Data
+
+#### `staging.trips_summary`
 - **Type**: `duckdb.sql`
 - **Strategy**: `time_interval`
 - **Incremental Key**: `pickup_time`
 - **Time Granularity**: `timestamp`
-- **Purpose**: Store raw ingested data from Python ingestion table to persistent storage with normalized column names
+- **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pickup_location_id`, `dropoff_location_id`, `taxi_type`)
+- **Purpose**: Normalize column names, clean, and enrich trip data
 
 **Time-Interval Strategy**:
 The `time_interval` strategy is designed for incremental processing based on time-based keys. How it works:
@@ -269,35 +265,37 @@ The `time_interval` strategy is designed for incremental processing based on tim
 Why we chose it: This strategy is ideal for time-series data where we want to reprocess specific date ranges (e.g., to handle late-arriving data or corrections) without affecting other time periods.
 
 **Bruin Configuration**:
-- Reads from `tier_1.ingest_trips`
-- Normalizes column names (e.g., `tpep_pickup_datetime` → `pickup_time`)
-- Adds `loaded_at` timestamp column
-- Preserves `extracted_at` timestamp from ingestion layer
-
-### 3. Tier 2: Cleaned & Enriched Data
-
-#### `tier_2.trips_summary`
-- **Type**: `duckdb.sql`
-- **Strategy**: `time_interval`
-- **Incremental Key**: `pickup_time`
-- **Time Granularity**: `timestamp`
-- **Primary Key**: Composite (`pickup_time`, `dropoff_time`, `pickup_location_id`, `dropoff_location_id`, `taxi_type`)
-- **Purpose**: Clean, deduplicate, and enrich trip data
-
-**Time-Interval Strategy**:
-Same as tier_1 - processes data incrementally based on the pickup_time date range, allowing efficient updates to cleaned and enriched data.
-
-**Bruin Configuration**:
-- Reads from `tier_1.trips_historic`
-- Enriches with location data from `tier_1.taxi_zone_lookup`
-- Enriches with payment type descriptions from `tier_1.payment_lookup`
+- Reads from `raw.trips_raw`
+- Normalizes column names using COALESCE to handle yellow (tpep_*) vs green (lpep_*) taxi types:
+  - `COALESCE(tpep_pickup_datetime, lpep_pickup_datetime)` → `pickup_time` (cast to TIMESTAMP)
+  - `COALESCE(tpep_dropoff_datetime, lpep_dropoff_datetime)` → `dropoff_time` (cast to TIMESTAMP)
+  - `pulocationid` → `pickup_location_id`
+  - `dolocationid` → `dropoff_location_id`
+  - `payment_type` → cast to INTEGER
+- Calculates `trip_duration_seconds` from pickup and dropoff times
+- Enriches with location data from `raw.taxi_zone_lookup`
+- Enriches with payment type descriptions from `raw.payment_lookup`
+- Applies data quality filters (positive duration, reasonable trip length, non-negative amounts, valid payment types)
+- **Deduplicates records** using `QUALIFY ROW_NUMBER()` partitioned by trip attributes (see Deduplication Strategy below)
 - Adds `updated_at` timestamp column
-- Preserves `extracted_at` timestamp from tier_1
+- Preserves `extracted_at` timestamp from raw
 - All primary key columns are non-nullable
 
-### 4. Tier 3: Reports
+**Deduplication Strategy**:
 
-#### `tier_3.report_trips_monthly`
+Since `raw.trips_raw` uses an **append** materialization strategy, re-ingesting the same date range (e.g., running the pipeline twice for January 2025) creates duplicate records. Deduplication is therefore handled in this staging layer using `QUALIFY ROW_NUMBER()`.
+
+The deduplication logic partitions by these columns and keeps the most recently extracted record (`ORDER BY extracted_at DESC`):
+- `pickup_time`, `dropoff_time`
+- `pickup_location_id`, `dropoff_location_id`
+- `taxi_type`, `trip_distance`, `passenger_count`
+- `fare_amount`, `tip_amount`, `total_amount`, `payment_type`
+
+**Why this combination?** The NYC TLC dataset has no single unique trip identifier. However, the odds of two completely identical trips (same pickup/dropoff times, locations, distance, passenger count, and payment details) occurring are effectively zero. This combination of columns reliably identifies unique rides.
+
+### 3. Reports: Aggregated Analytics
+
+#### `reports.report_trips_monthly`
 - **Type**: `duckdb.sql`
 - **Strategy**: `time_interval`
 - **Incremental Key**: `month_date`
@@ -309,7 +307,7 @@ Same as tier_1 - processes data incrementally based on the pickup_time date rang
 Uses `month_date` as the incremental key, which is the first day of each month. This allows reprocessing of specific months (e.g., if source data is corrected) without affecting other months.
 
 **Bruin Configuration**:
-- Reads from `tier_2.trips_summary`
+- Reads from `staging.trips_summary`
 - Aggregates data by `taxi_type` and month
 - Adds `updated_at` timestamp column
 - Aggregates `extracted_at` using MAX to track latest extraction time per month
@@ -328,16 +326,34 @@ Before running the full pipeline, it's recommended to test individual assets to 
 
 ```bash
 # Example: Test the Python ingestion asset
-bruin run ./nyc-taxi/assets/tier_1/ingest_trips.py \
+bruin run ./nyc-taxi/assets/raw/trips_raw.py \
   --start-date 2021-01-01 \
   --end-date 2021-01-31 \
   --environment default
 ```
 
+You can also test with a single taxi type by overriding the `taxi_types` variable:
+
+```bash
+# Test with only yellow taxis
+bruin run ./nyc-taxi/assets/raw/trips_raw.py \
+  --start-date 2021-01-01 \
+  --end-date 2021-01-31 \
+  --environment default \
+  --var 'taxi_types=["yellow"]'
+
+# Test with only green taxis
+bruin run ./nyc-taxi/assets/raw/trips_raw.py \
+  --start-date 2021-01-01 \
+  --end-date 2021-01-31 \
+  --environment default \
+  --var 'taxi_types=["green"]'
+```
+
 When running a single asset, only that asset is executed. To also run all downstream assets (assets that depend on the one you're running), add the `--downstream` flag:
 
 ```bash
-bruin run ./nyc-taxi/assets/tier_1/ingest_trips.py \
+bruin run ./nyc-taxi/assets/raw/trips_raw.py \
   --start-date 2021-01-01 \
   --end-date 2021-01-31 \
   --environment default \
@@ -386,17 +402,17 @@ The `bruin query` command allows you to execute SQL queries against your databas
 
 ```bash
 # Query using connection name
-bruin query --connection duckdb-default --query "SELECT COUNT(*) FROM tier_1.ingest_trips"
+bruin query --connection duckdb-default --query "SELECT COUNT(*) FROM raw.trips_raw"
 ```
 
 **Example queries:**
 
 ```bash
 # Check monthly report (should show 14 months for 2021-01 to 2022-02)
-bruin query --connection duckdb-default --query "SELECT COUNT(*) as month_count FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28'"
+bruin query --connection duckdb-default --query "SELECT COUNT(*) as month_count FROM reports.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28'"
 
 # Check monthly report details
-bruin query --connection duckdb-default --query "SELECT * FROM tier_3.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28' ORDER BY month_date"
+bruin query --connection duckdb-default --query "SELECT * FROM reports.report_trips_monthly WHERE month_date >= '2021-01-01' AND month_date <= '2022-02-28' ORDER BY month_date"
 ```
 
 ### Using DuckDB CLI
@@ -405,7 +421,7 @@ You can also query your DuckDB database directly using the DuckDB CLI tool. The 
 
 ```bash
 # Run queries in terminal
-duckdb duckdb.db -c "SELECT COUNT(*) FROM tier_1.ingest_trips"
+duckdb duckdb.db -c "SELECT COUNT(*) FROM raw.trips_raw"
 
 # Open interactive DuckDB shell
 duckdb duckdb.db
@@ -416,30 +432,20 @@ duckdb duckdb.db -ui
 
 The `-ui` flag opens a web-based interface in your browser where you can run queries, explore tables, and visualize data interactively.
 
-## Known Issues & Workarounds
-
-### Date Type Casting in DATE_TRUNC
-- **Issue**: DATE_TRUNC requires explicit type casting when using template variables
-- **Solution**: 
-  - Cast template variables to TIMESTAMP: `CAST('{{ start_datetime }}' AS TIMESTAMP)`
-  - Cast source datetime columns to TIMESTAMP: `CAST(tpep_pickup_datetime AS TIMESTAMP)`
-  - This ensures proper type resolution in DuckDB
-
 ## Implementation Checklist
 
 - [ ] Create `nyc-taxi/pipeline.yml` with correct configuration and variables
 - [ ] Create `requirements.txt` in pipeline root with Python dependencies
 - [ ] Create `.bruin.yml` for local environment configuration
-- [ ] Create `tier_1.ingest_trips.py` with date-to-month conversion logic
-- [ ] Create `tier_1.taxi_zone_lookup.sql` with HTTP CSV ingestion
-- [ ] Create `tier_1.payment_lookup.asset.yml` with seed file configuration
-- [ ] Create `tier_1.payment_lookup.csv` with payment type mapping data
-- [ ] Create `tier_1.trips_historic.sql` with time_interval strategy and column normalization
-- [ ] Create `tier_2.trips_summary.sql` with deduplication and enrichment
-- [ ] Create `tier_3.report_trips_monthly.sql` with monthly aggregations
-- [ ] Add all required Bruin metadata (name, uri, description, owner, tags, columns)
+- [ ] Create `raw.trips_raw.py` to ingest data from source website and materialize as a table using append strategy (using Bruin Python Materialization)
+- [ ] Create `raw.taxi_zone_lookup.sql` with HTTP CSV ingestion
+- [ ] Create `raw.payment_lookup.csv` with payment type mapping data
+- [ ] Create `raw.payment_lookup.asset.yml` with seed file configuration
+- [ ] Create `staging.trips_summary.sql` with column normalization and enrichment
+- [ ] Create `reports.report_trips_monthly.sql` with monthly aggregations
+- [ ] Add all required Bruin metadata (description, columns, etc.) to all assets (note: `name` is optional and will be inferred from file path if not provided)
 - [ ] Set primary keys and nullable constraints correctly
-- [ ] Add timestamp tracking columns (extracted_at, loaded_at, updated_at)
+- [ ] Add timestamp tracking columns (extracted_at, updated_at)
 - [ ] Test individual assets
 - [ ] Test full pipeline with different date ranges
 - [ ] Verify data quality and row counts
@@ -450,18 +456,21 @@ The `-ui` flag opens a web-based interface in your browser where you can run que
    - Read dates from `BRUIN_START_DATE` and `BRUIN_END_DATE` environment variables (YYYY-MM-DD format)
    - Use `generate_month_range()` function to convert date range to list of (year, month) tuples
    - Handles cross-year ranges correctly (e.g., 2021-12-01 to 2022-01-01 → Dec 2021, Jan 2022)
-2. **Column Normalization**: 
-   - **Ingestion Layer**: Preserves original column names from parquet files as-is (e.g., `vendor_id`, `tpep_pickup_datetime`, `pu_location_id`)
-   - **Tier_1 Layer**: Transforms column names to more human-readable, lowercase formats for better readability and consistency:
-     - `tpep_pickup_datetime` → `pickup_time`
-     - `tpep_dropoff_datetime` → `dropoff_time`
-     - `pu_location_id` → `pickup_location_id`
-     - `do_location_id` → `dropoff_location_id`
-   - This separation allows the ingestion layer to process data as-is, while tier_1 standardizes the schema for downstream consumption
-3. **Taxi Types**: Configured via pipeline variables (default: `["yellow", "green"]`), accessible in Python assets via `BRUIN_VARS` environment variable
-4. **Deduplication**: Use `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` and filter `rn = 1` to keep most recent record for each unique trip
+2. **Deduplication in Staging**: 
+   - The ingestion layer (`raw.trips_raw`) uses an **append** strategy, meaning re-ingesting the same date range creates duplicates. Deduplication is handled in `staging.trips_summary` using `QUALIFY ROW_NUMBER()`.
+   - According to [NYC TLC documentation](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page), there is no single unique trip identifier. However, the combination of trip attributes (pickup/dropoff times, locations, distance, passenger count, fare details) reliably identifies unique rides—the probability of two completely identical trips is effectively zero.
+   - The deduplication keeps the most recently extracted record when duplicates exist (`ORDER BY extracted_at DESC`).
+3. **Column Normalization**: 
+   - **Ingestion Layer (raw.trips_raw)**: Preserves original column names from parquet files as-is (e.g., `vendorid`, `tpep_pickup_datetime` for yellow taxis, `lpep_pickup_datetime` for green taxis, `pulocationid`). Adds `taxi_type` and `extracted_at` columns.
+   - **Staging Layer (staging.trips_summary)**: Transforms column names to more human-readable, consistent formats:
+     - Uses `COALESCE(tpep_pickup_datetime, lpep_pickup_datetime)` → `pickup_time` (cast to TIMESTAMP) to handle both taxi types
+     - Uses `COALESCE(tpep_dropoff_datetime, lpep_dropoff_datetime)` → `dropoff_time` (cast to TIMESTAMP)
+     - `pulocationid` → `pickup_location_id`
+     - `dolocationid` → `dropoff_location_id`
+     - `payment_type` → cast to INTEGER
+   - This separation allows the ingestion layer to process data as-is, while staging standardizes the schema for downstream consumption
+4. **Taxi Types**: Configured via pipeline variables (default: `["yellow", "green"]`), accessible in Python assets via `BRUIN_VARS` environment variable
 5. **Lookup Joins**: Use `LEFT JOIN` to retain all trips even if location_id or payment_type_id not found in lookup tables (taxi_zone_lookup and payment_lookup)
 6. **Timestamp Tracking**: 
    - `extracted_at`: Set in ingestion layer when data is downloaded
-   - `loaded_at`: Set in tier_1 when data is loaded into persistent storage
-   - `updated_at`: Set in tier_2 and tier_3 when data is updated/refreshed
+   - `updated_at`: Set in staging and reports when data is updated/refreshed
