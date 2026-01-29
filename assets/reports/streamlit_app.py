@@ -25,7 +25,7 @@ st.markdown(
     """
 **About this dashboard**
 - Tech: Bruin → MotherDuck (DuckDB) for data; Streamlit + Altair for viz.
-- Data: NYC TLC yellow taxi trips (2023-01 to 2025-11).
+- Data: NYC TLC yellow taxi trips (2020-01 to 2025-11).
 - Summary: cleaned for distance/duration/speed/fare/tip sanity and borough validity; visuals cover tip% by time/flow and monthly totals. See footnotes for full criteria.
 """
 )
