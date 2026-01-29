@@ -120,6 +120,8 @@ for df, col in [(seasonality, "avg_tip_pct"), (dow_hour, "avg_tip_pct"), (socio,
 # Heatmap: day-of-week x month (tip rate)
 st.subheader("Tip % by Day of Week and Month")
 dow_labels = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+dow_order = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 seasonality["dow_label"] = seasonality["dow"].map(dow_labels)
 seasonality["month_label"] = seasonality["month_num"].apply(lambda m: pd.Timestamp(year=2024, month=int(m), day=1).strftime("%b"))
 
@@ -127,8 +129,8 @@ season_heat = (
     alt.Chart(seasonality)
     .mark_rect()
     .encode(
-        x=alt.X("month_label:O", title="Month"),
-        y=alt.Y("dow_label:O", title="Day of Week"),
+        x=alt.X("month_label:O", title="Month", sort=month_order),
+        y=alt.Y("dow_label:O", title="Day of Week", sort=dow_order),
         color=alt.Color("avg_tip_pct:Q", title="Average Tip %", scale=alt.Scale(scheme="cividis")),
         tooltip=[
             alt.Tooltip("month_label", title="Month"),
@@ -152,7 +154,7 @@ dow_hour_heat = (
     .mark_rect()
     .encode(
         x=alt.X("pickup_hour:O", title="Hour of Day"),
-        y=alt.Y("dow_label:O", title="Day of Week"),
+        y=alt.Y("dow_label:O", title="Day of Week", sort=dow_order),
         color=alt.Color("avg_tip_pct:Q", title="Average Tip %", scale=alt.Scale(scheme="cividis")),
         tooltip=[
             alt.Tooltip("dow_label", title="Day"),
